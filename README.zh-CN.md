@@ -29,6 +29,8 @@ npx skills add zephyrpersonal/agent-team-bootstrap --list
 
 `npx skills` 安装完不保证正在运行的旧 Session 自动加载最新规则；建议新开/恢复会话并重新初始化角色。
 
+**Private 仓库说明：** 当前仓库是 Private。在其他电脑使用 `npx skills` 安装前，请先配置有权限访问此仓库的 GitHub 身份认证，例如 `gh auth login` 或 SSH。如果希望任何人都能免授权安装，可以在 GitHub Settings 中改为 Public。
+
 ## Leader 启动示例
 
 Codex：
