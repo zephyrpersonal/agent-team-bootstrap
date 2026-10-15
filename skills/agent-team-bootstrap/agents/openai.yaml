@@ -1,0 +1,3 @@
+interface:
+  display_name: "Agent Team Bootstrap"
+  short_description: "Launch Leader or Worker using native Codex / Claude messages"
