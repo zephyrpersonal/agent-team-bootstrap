@@ -30,6 +30,10 @@ npx skills add zephyrpersonal/agent-team-bootstrap --list
 
 For other agents or an interactive selection, run `npx skills add zephyrpersonal/agent-team-bootstrap` without flags.
 
+### Private repository authentication
+
+This repository is currently **private**. To install on another machine, first authenticate to GitHub (for example with `gh auth login`, Git credential helper, or SSH access to this repository). The Skills CLI supports authenticated private repositories. To let anyone install without GitHub access, change repository visibility to Public in GitHub Settings.
+
 ## Start a Leader
 
 Run in a dedicated Codex session or Claude Code session (ideally from a separate, non-coding worktree).
