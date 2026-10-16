@@ -55,10 +55,10 @@ P:wms T:COMPLETE ID:fe23 TO:leader REF:PR#42
 | `BLOCKED` | Worker → Leader | Decision or resolution plan; escalate to Owner if required |
 | `CONTRACT_CHANGE` | Worker → Leader | Scope/impact decision or dependent-Worker notification |
 | `SCOPE_CHANGE_REQUEST` | Worker → Leader | Explicit confirmed scope or Owner escalation |
-| `READY_FOR_REVIEW` | Worker → Leader | Route `REVIEW_REQUEST` to independent Reviewer; do not self-review |
-| `REVIEW_REQUEST` | Leader → Reviewer Worker | Reviewer checks artifacts and reports `REVIEW_RESULT` |
-| `REVIEW_RESULT` | Reviewer Worker → Leader | Leader records receipt, routes `REVIEW_OUTCOME`; never self-verifies |
-| `COMPLETE` | Worker → Leader | Record completion claim; await Reviewer evidence, do not merge |
+| `READY_FOR_REVIEW` | Producer → assigned Reviewer | Prefer direct `REVIEW_REQUEST`; use `REVIEWER_NEEDED` → Leader only if no Reviewer exists |
+| `REVIEW_REQUEST` | Producer → Reviewer Worker | Reviewer checks artifacts and replies directly to producer |
+| `REVIEW_RESULT` | Reviewer → Producer | Direct final technical review result; Leader does not relay it |
+| `REVIEW_VERDICT` | Reviewer → Leader | One final independent sign-off receipt |\n| `COMPLETE` | Producer → Leader | Independent completion receipt; Leader checks existence of verdict receipt, not implementation |\n| `PEER_REQUEST` / `PEER_REPLY` | Worker ↔ Worker | Direct authorized technical exchange; Leader not copied |\n| `PEER_ROUTE_REQUEST` / `REVIEWER_NEEDED` | Worker → Leader | Introduce verified contact or assign reviewer only; no content relaying |
 | `ACK_RECEIVED` / `PONG` | Receiver → sender | No automatic recursive ACK |
 
 ## JOIN_ACK example
