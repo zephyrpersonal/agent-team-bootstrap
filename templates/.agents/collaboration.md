@@ -92,7 +92,7 @@ Worker 接收并发送 `ACK_RECEIVED` 后，Leader 才将其标记为 ACTIVE。
 - Leader 在注册/派发时仅向有任务协作关系的 Worker 提供经确认的同行原生地址；不确定目标时，Worker 发送一次 `PEER_ROUTE_REQUEST` 请求介绍。
 - Worker 可就已批准范围内的技术细节自由协商，涉及职责归属/公共契约/共享迁移/资源抢占等则通知 Leader 协调。Worker 不可彼此扩权。
 - 审查在 Worker 和 Reviewer 之间直接进行多轮；最终 Reviewer 给 Leader 一次 `REVIEW_VERDICT`，提交者给 Leader 一次独立 `COMPLETE`。Leader 不审查，不做 Reviewer 消息总线。
-- 消息按 `skills/agent-team-bootstrap/references/protocol.md` 的逻辑格式发送（Skill 安装后的对应文件），Codex TUI 尽量每条低于 600 UTF-8 字节。没有 Listener、轮询和后台守护程序。
+- 消息按 `skills/agent-team-bootstrap/references/protocol.md` 的逻辑格式发送（Skill 安装后的对应文件），**所有角色、所有方向**的原生消息统一按每条最多 600 UTF-8 字节的保守预算处理；原生工具若更严格则遵从其限制。没有 Listener、轮询和后台守护程序。
 
 ## 7. 工作消息与响应
 
