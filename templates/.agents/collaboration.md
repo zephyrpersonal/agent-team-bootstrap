@@ -104,7 +104,9 @@ Worker 接收并发送 `ACK_RECEIVED` 后，Leader 才将其标记为 ACTIVE。
 | `BLOCKED` | Worker | Leader 协调依赖或向 Owner 升级 |
 | `CONTRACT_CHANGE` | Worker | Leader 通知相关 Worker、管理集成顺序 |
 | `READY_FOR_REVIEW` | 开发 Worker | 已有 Reviewer 时直接发送 `REVIEW_REQUEST`；没有时向 Leader 请求 `REVIEWER_NEEDED` |
-| `REVIEW_RESULT` | Reviewer Worker | 直接返回开发 Worker，无需 Leader 转发 |\n| `REVIEW_VERDICT` | Reviewer Worker | 审查最终完成后仅向 Leader 发送一份最终结论 |\n| `PEER_REQUEST` / `PEER_REPLY` | Worker ↔ Worker | 技术交流直达对端，不抄送 Leader |
+| `REVIEW_RESULT` | Reviewer Worker | 直接返回开发 Worker，无需 Leader 转发 |
+| `REVIEW_VERDICT` | Reviewer Worker | 审查最终完成后仅向 Leader 发送一份最终结论 |
+| `PEER_REQUEST` / `PEER_REPLY` | Worker ↔ Worker | 技术交流直达对端，不抄送 Leader |
 | `COMPLETE` | Worker | Leader 根据真实证据验收；不得自动合并 |
 | `SCOPE_CHANGE_REQUEST` | Worker | Leader 校验 Owner 约束并协调职责 |
 
