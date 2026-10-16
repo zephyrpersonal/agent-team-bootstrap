@@ -71,6 +71,14 @@ Claude Code：把首行改为 `/agent-team-bootstrap worker`。
 
 Codex TUI 的 `send_message_to_thread` 在当前源码中限制单条 `prompt` 为 **1,000 UTF-8 字节**（不是 1,000 Tokens）。报错 `prompt exceeded the maximum context budget` 通常是这项发送前校验失败。为了留余量，本 Skill 要求 Codex TUI 每条消息尽量控制在 **600 字节以内**，只发事件、简短指令和已存在交付物的引用，不传全文。长文档是交付物，不是消息收件箱。此限制不等同于 Leader 的上下文窗口用尽。
 
+## Worker Mesh（Worker 点对点通信）
+
+**普通技术消息直接在 Worker 之间传递，不经过 Leader。** 前端找后端确认 API，QA 与开发讨论缺陷，Reviewer 向开发者反馈修改意见，全部通过当前平台实际可用的原生跨 Session 工具点对点进行。必须确认对方的真实 Session ID、所属项目与授权职责，不能向不明 Thread 群发。
+
+Leader 只负责 Control Plane：注册、任务归属、依赖及共享资源冲突、审查者指定、最终状态汇总。没有已确认同行地址时，Worker 可一次性向 Leader 请求 `PEER_ROUTE_REQUEST`（拿地址，不代传内容）。只有影响职责/范围/共享契约/阻塞或最终审查结论才通知 Leader，避免把 Leader 变成消息总线。
+
+审查流程为开发 Worker → Reviewer Worker → 开发 Worker，必要时双方多轮交流；Reviewer 完成后向 Leader 发送一次 `REVIEW_VERDICT`，开发 Worker 自行发送 `COMPLETE`。禁止 Leader 自己审查，也不启动轮询或监听。Codex TUI 每条 P2P 消息遵循保守 600 UTF-8 字节预算。
+
 ## 验证与限制
 
 先做 `PING` → `PONG`，再做 `JOIN_REQUEST` → `JOIN_ACK` → `ACK_RECEIVED`，确认收发双方真实互通。发送工具成功不代表 Leader 接受注册或完成了任务。
