@@ -80,6 +80,20 @@ risks:
 requires_reply: true
 ```
 
+## Codex TUI message limits
+
+Codex source currently limits `codex_tui.send_message_to_thread` prompts to **1,000 UTF-8 bytes** and the XML-delegated form to 1,256 bytes. These are bytes, not characters or model tokens. For reliable operation, limit each native Codex TUI message to **600 UTF-8 bytes**. Keep the common event fields only when useful; shortened plaintext is preferred:
+
+```text
+P:wms T:JOIN_REQUEST ID:b1 FROM:backend-01 ROLE:api LEADER:l1 ACK:1
+P:wms T:ASSIGN ID:l4 REF:docs/tasks/42.md ACK:1
+P:wms T:READY_FOR_REVIEW ID:b6 REF:PR#42 ACK:1
+```
+
+The real target thread ID is supplied to the native tool, not repeated as a long address in the prompt. Detailed task briefs, diffs, logs and evidence belong in an already accessible artifact; send the reference, **not** the artifact contents. A referenced artifact must actually exist and be accessible. No file is used as a message inbox, no Leader code writing, and no polling.
+
+This exact error, `prompt exceeded the maximum context budget`, is a **pre-send validation rejection**. Shorten before retrying; don't mistake it for a full model context window or an ambiguous delivery failure. Source: https://github.com/openai/codex/blob/main/codex-rs/tui/src/dynamic_tools.rs
+
 ## Coordination-only Leader and idle behavior
 
 - Leader is a **receipt-driven dispatcher**: assign responsibilities, route blockers, request independent reviews, summarize received results. Never code, inspect diffs, run tests, review implementation, merge or deploy.
