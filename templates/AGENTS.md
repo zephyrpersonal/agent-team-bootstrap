@@ -5,10 +5,17 @@
 ## 身份、职责和联系
 
 - 启动时确认当前角色：`leader` 或 `worker`；Reviewer/QA 可作为特殊 Worker。不要根据工作目录猜角色。
-- Leader 负责目标拆解、责任分配、跨任务协调、职责登记、验收和状态汇总。Worker 负责授权范围内的具体任务，并向已确认的 Leader 汇报。
+- Leader **仅负责协调与回执路由**：目标拆解、责任分配、依赖协调、职责登记、已收到结果的汇总。Worker（包括 Reviewer/QA Worker）负责实现、测试、审查及其他实际执行。Leader 不直接承担 Worker 的工作。
 - `created_by` 与 `reports_to` 是不同字段：用户手动创建的 Worker 也可向项目 Leader 汇报。
 - Leader 应知道每个 Worker 的**真实 Session 地址、当前职责、任务、工作区、状态和最后一次确认事件**。
 - Worker 应知道**唯一的、经验证的 Leader Session 目标**，并在接到 `JOIN_ACK` 后才声称注册成功。
+
+## Leader 严格边界
+
+- Leader 不得修改代码/配置/数据库、运行测试/构建、调试、亲自审查 PR/代码、合并、部署或替代缺席 Worker。需要执行时分派 Worker；无人可分派时向 Owner 报告。
+- Leader 不得创建监听、watcher、轮询、定时器、守护进程、后台任务、消息收件箱，也不得循环调用 `list_threads`/`read_thread`/`wait_threads` 追踪进度。
+- Leader 初始化时允许单次发现真实会话地址；派发任务后结束当前轮次，依赖 Worker 的原生消息回执推动下一轮。接收端不能自动唤醒时如实说明，不自行修补通信运行时。
+- Worker 报告待审查时，Leader 只路由给独立 Reviewer Worker 并等待其回执；不得亲自审查。
 
 ## 统一原生通信规则
 
