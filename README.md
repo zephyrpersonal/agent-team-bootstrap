@@ -90,7 +90,7 @@ Review is likewise P2P: producer sends `REVIEW_REQUEST` to Reviewer, Reviewer se
 2. Run the Worker bootstrap, using that exact verified Leader address.
 3. Have Worker send `PING`, verify the Leader responds `PONG` with matching `in_reply_to`.
 4. Worker sends `JOIN_REQUEST`; Leader replies `JOIN_ACK`; Worker acknowledges.
-5. Worker submits `READY_FOR_REVIEW`; Leader verifies and returns `REVIEW_RESULT`.
+5. Producer sends `REVIEW_REQUEST` directly to Reviewer; Reviewer sends final `REVIEW_RESULT` directly to producer and one `REVIEW_VERDICT` to Leader. Producer separately sends `COMPLETE` to Leader.
 
 If peer-to-peer sending is unavailable, the skill must report `NATIVE_MESSAGING_UNAVAILABLE`, **not** pretend that a file write or Git commit is a native message. Different versions of Codex Desktop and CLI can expose different thread-management tools. Native Codex messages do not directly reach Claude Code sessions and vice versa.
 
@@ -120,7 +120,7 @@ The optional project templates define team roles and communication rules. They a
 - **Role is independent of creator:** a human-created Worker can report to the project's Leader.
 - **Native messaging first:** `ListAgents` / `SendMessage` for Claude Code, exposed thread messaging tools for Codex.
 - **Actual capabilities only:** probe which tools the host provides; never hallucinate session APIs or treat `spawn_agent` as an independent thread.
-- **Explicit acknowledgments:** `JOIN_REQUEST` / `JOIN_ACK`, `ASSIGN` / `ASSIGN_ACK`, `READY_FOR_REVIEW` / `REVIEW_RESULT`.
+- **Explicit acknowledgments:** `JOIN_REQUEST` / `JOIN_ACK`, `ASSIGN` / `ASSIGN_ACK`; direct peer `REVIEW_REQUEST` / `REVIEW_RESULT`; final `REVIEW_VERDICT` and `COMPLETE` to Leader.
 - **Deliverables are separate from messages:** Git/PR/tests persist artifacts; cross-session messages coordinate work.
 - **No Issue dependency:** tasks can originate from the user, the Leader, a Worker, or an external system.
 - **No implicit privileged actions:** merges, production deployments, destructive DB operations, and scope expansion must follow project approval rules.
