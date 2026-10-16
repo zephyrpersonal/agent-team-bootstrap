@@ -67,6 +67,10 @@ Leader target: <Leader 提供的真实 Thread/Session 地址>
 
 Claude Code：把首行改为 `/agent-team-bootstrap worker`。
 
+## Codex 跨 Thread 消息长度
+
+Codex TUI 的 `send_message_to_thread` 在当前源码中限制单条 `prompt` 为 **1,000 UTF-8 字节**（不是 1,000 Tokens）。报错 `prompt exceeded the maximum context budget` 通常是这项发送前校验失败。为了留余量，本 Skill 要求 Codex TUI 每条消息尽量控制在 **600 字节以内**，只发事件、简短指令和已存在交付物的引用，不传全文。长文档是交付物，不是消息收件箱。此限制不等同于 Leader 的上下文窗口用尽。
+
 ## 验证与限制
 
 先做 `PING` → `PONG`，再做 `JOIN_REQUEST` → `JOIN_ACK` → `ACK_RECEIVED`，确认收发双方真实互通。发送工具成功不代表 Leader 接受注册或完成了任务。
