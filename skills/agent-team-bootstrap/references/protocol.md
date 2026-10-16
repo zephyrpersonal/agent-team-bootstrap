@@ -22,6 +22,27 @@ summary: Request to join this project's team.
 requires_reply: true
 ```
 
+## Routing: Control Plane vs Worker Mesh
+
+- `Leader` = Control Plane only: register workers, own responsibilities and resource conflicts, authorize peer introductions, assign Reviewer, receive only decisive milestones/final receipts. Never act as a relay for routine questions, comments, API clarifications, or review revisions.
+- `Workers` = Collaboration Plane: direct peer communication over the SAME native Codex or Claude cross-session transport. Only address an **authorized, verified native peer session**, not a guessed or stale thread. If missing, ask Leader once for `PEER_ROUTE_REQUEST`; Leader replies with the peer's verified address and scope, not relayed content. Do not list peers repeatedly or poll.
+- P2P may cover technical Q&A, within-contract API decisions, integration, bug feedback and the whole review/fix loop. P2P may **not** reassign tasks, change ownership/access, mutate shared migrations/contracts outside approved scope, approve deployment or bypass Owner decisions.
+- Escalate `BLOCKED`, `SCOPE_CHANGE_REQUEST`, or `COORDINATION_UPDATE` to Leader only when needed for ownership, shared resource, cross-task blocker or high-impact contract change; no routine CC to Leader.
+- Code review: producer → Reviewer `REVIEW_REQUEST`; Reviewer → producer `REVIEW_FEEDBACK` and final `REVIEW_RESULT`. After final review only, Reviewer → Leader `REVIEW_VERDICT` with artifact reference; producer → Leader `COMPLETE`. Leader records both independently and reports outcome. If no Reviewer was assigned, producer → Leader `REVIEWER_NEEDED` once, Leader introduces Reviewer, then goes idle.
+- Prefer **one final notification per decisive event** and avoid redundant relay loops. All peer events must obey Codex TUI's conservative 600 UTF-8 byte budget.
+
+Compact examples (native `prompt` text, NOT a persistent mailbox):
+
+```text
+P:wms T:PEER_REQUEST ID:fe12 TO:backend01 Q:order status enums? REF:docs/api/orders.md ACK:1
+P:wms T:PEER_REPLY ID:be12 RE:fe12 A:pending,paid,cancelled
+P:wms T:REVIEW_REQUEST ID:fe19 TO:qa01 REF:PR#42 ACK:1
+P:wms T:REVIEW_FEEDBACK ID:qa20 RE:fe19 REF:PR#42#comment-3
+P:wms T:REVIEW_RESULT ID:qa21 RE:fe19 STATUS:approved REF:PR#42
+P:wms T:REVIEW_VERDICT ID:qa22 TO:leader STATUS:approved REF:PR#42
+P:wms T:COMPLETE ID:fe23 TO:leader REF:PR#42
+```
+
 ## Events and mandatory response
 
 | Event | Sender → receiver | Expected response |
