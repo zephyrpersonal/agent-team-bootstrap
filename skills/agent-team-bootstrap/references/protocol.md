@@ -34,8 +34,10 @@ requires_reply: true
 | `BLOCKED` | Worker → Leader | Decision or resolution plan; escalate to Owner if required |
 | `CONTRACT_CHANGE` | Worker → Leader | Scope/impact decision or dependent-Worker notification |
 | `SCOPE_CHANGE_REQUEST` | Worker → Leader | Explicit confirmed scope or Owner escalation |
-| `READY_FOR_REVIEW` | Worker → Leader | `REVIEW_RESULT`, citing verified artifacts |
-| `COMPLETE` | Worker → Leader | No automatic merge; Lead checks real acceptance |
+| `READY_FOR_REVIEW` | Worker → Leader | Route `REVIEW_REQUEST` to independent Reviewer; do not self-review |
+| `REVIEW_REQUEST` | Leader → Reviewer Worker | Reviewer checks artifacts and reports `REVIEW_RESULT` |
+| `REVIEW_RESULT` | Reviewer Worker → Leader | Leader records receipt, routes `REVIEW_OUTCOME`; never self-verifies |
+| `COMPLETE` | Worker → Leader | Record completion claim; await Reviewer evidence, do not merge |
 | `ACK_RECEIVED` / `PONG` | Receiver → sender | No automatic recursive ACK |
 
 ## JOIN_ACK example
@@ -77,6 +79,12 @@ risks:
   - Integration environment not tested
 requires_reply: true
 ```
+
+## Coordination-only Leader and idle behavior
+
+- Leader is a **receipt-driven dispatcher**: assign responsibilities, route blockers, request independent reviews, summarize received results. Never code, inspect diffs, run tests, review implementation, merge or deploy.
+- After sending a message, finish the turn. **Do not run watchers, filesystem listeners, polling loops, `wait_threads`, scheduled checks, or status probes** to await a Worker. Native incoming messages provide the next event when the host supports delivery.
+- Missing Worker / Reviewer means `NO_WORKER_AVAILABLE` / `REVIEW_PENDING`, not that the Leader should take over.
 
 ## Handling ambiguous outcomes
 
