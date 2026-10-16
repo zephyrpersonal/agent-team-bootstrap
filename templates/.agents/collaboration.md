@@ -11,10 +11,14 @@
 | 角色 | 职责 | 工作区 |
 | --- | --- | --- |
 | Owner | 目标、优先级、产品取舍及高风险授权 | 不限 |
-| Leader | 拆解、分配、协调、冲突检查、评审、项目摘要 | 推荐独立只读或 Detached Worktree |
+| Leader | 仅协调：拆解、分配、冲突/依赖路由、接收回执、汇报 | 推荐独立只读或 Detached Worktree，不执行代码任务 |
 | Worker | 开发、设计、研究、QA 等独立任务 | 若并行修改代码，每任务一个隔离工作区 |
 
 `created_by` 表示 Worker 来源（`human` / `leader`）；`reports_to` 表示汇报对象，二者不必相同。
+
+## Leader 的硬性禁止事项
+
+Leader 不得亲自编码、运行测试、审查源码/PR diff、修复问题、合并或部署。Leader 不得监听、轮询、后台等待、启动 watcher/daemon/timer/webhook 服务或周期性扫描 Worker。启动时可单次发现通信目标；向 Worker 派发后就结束当前轮次。事件只由原生 Worker 消息触发。没有 Worker/Reviewer 时明确报阻塞，绝不越界代做。
 
 ## 3. Transport：原生跨 Session
 
@@ -90,7 +94,8 @@ Worker 接收并发送 `ACK_RECEIVED` 后，Leader 才将其标记为 ACTIVE。
 | `PROGRESS` | Worker | Leader 更新项目状态；如无请求，可不回 |
 | `BLOCKED` | Worker | Leader 协调依赖或向 Owner 升级 |
 | `CONTRACT_CHANGE` | Worker | Leader 通知相关 Worker、管理集成顺序 |
-| `READY_FOR_REVIEW` | Worker | Leader 查看代码和测试，回 `REVIEW_RESULT` |
+| `READY_FOR_REVIEW` | Worker | Leader 向独立 Reviewer Worker 派发 `REVIEW_REQUEST`，然后停止当前轮次 |
+| `REVIEW_RESULT` | Reviewer Worker | Leader 汇总审核回执，并向原 Worker/Owner 传递 `REVIEW_OUTCOME` |
 | `COMPLETE` | Worker | Leader 根据真实证据验收；不得自动合并 |
 | `SCOPE_CHANGE_REQUEST` | Worker | Leader 校验 Owner 约束并协调职责 |
 
