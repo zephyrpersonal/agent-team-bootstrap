@@ -72,9 +72,13 @@ For review, producer sends `REVIEW_REQUEST` directly to its authorized Reviewer.
 4. **P2P REPORT**: Producer sends `REVIEW_REQUEST` directly to assigned Reviewer. Reviewer sends `REVIEW_FEEDBACK` / final `REVIEW_RESULT` directly to producer. Reviewer sends one `REVIEW_VERDICT` to Leader; producer sends a separate `COMPLETE` receipt to Leader. If no reviewer is assigned, producer sends `REVIEWER_NEEDED` to Leader, who introduces one then goes idle.
 5. **Negative check**: If send isn't exposed or receiver isn't reachable, bootstrap must say `NATIVE_MESSAGING_UNAVAILABLE` / `JOIN_PENDING` instead of claiming success.
 
+## Universal message budget (all roles and routes)
+
+Every agent (Leader, Worker, Reviewer), sending in any direction (control, P2P, review or registration), MUST apply the same conservative **DEFAULT_MESSAGE_BUDGET_BYTES = 600 UTF-8 bytes per native message**. The actual tool may impose a lower limit; then use the lower one. Do not confuse bytes with tokens. For larger content, send a short event plus a real accessible artifact reference. This same policy also covers bootstrap messages to a new independent Worker.
+
 ## Codex TUI size error
 
-If `codex_tui.send_message_to_thread` returns `prompt exceeded the maximum context budget`, the current Codex TUI source sets `MAX_INPUT_BYTES = 1_000` and validates the outgoing native prompt **before** delivery. Count **UTF-8 bytes** (Chinese characters often use 3 each), not tokens; keep tool prompt to **600 bytes or fewer** to allow for formatting. Instead of forwarding long instructions, send a concise event and a verified task/PR/document reference. This specific error means the attempted message was not delivered, so re-send a shorter one once. Do not restart or compact the Leader merely to address this message-size failure.
+If `codex_tui.send_message_to_thread` returns `prompt exceeded the maximum context budget`, the current Codex TUI source sets `MAX_INPUT_BYTES = 1_000` and validates the outgoing native prompt **before** delivery. Count **UTF-8 bytes** (Chinese characters often use 3 each), not tokens; keep any native prompt to **600 UTF-8 bytes or fewer**, across all senders and message directions, to allow for formatting. Instead of forwarding long instructions, send a concise event and a verified task/PR/document reference. This specific error means the attempted message was not delivered, so re-send a shorter one once. Do not restart or compact the Leader merely to address this message-size failure.
 
 ## Troubleshooting 'Worker sent but Leader didn't respond'
 
