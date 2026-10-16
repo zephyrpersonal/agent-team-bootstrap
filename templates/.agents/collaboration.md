@@ -85,7 +85,16 @@ requires_reply: true
 
 Worker 接收并发送 `ACK_RECEIVED` 后，Leader 才将其标记为 ACTIVE。
 
-## 6. 工作消息与响应
+## 6. Worker Mesh：直接技术协作
+
+- Leader 负责 `Control Plane`：登记身份与已确认职责、分派任务、协调越界资源冲突、接收关键结果。它不转发普通技术问答，也不监听 Worker P2P。
+- Worker 使用本平台真实可调用的原生跨 Session 工具，核实目标项目/Session/职责后发送 `PEER_REQUEST`、`PEER_REPLY`、`REVIEW_REQUEST`、`REVIEW_FEEDBACK`、`REVIEW_RESULT`。不能跨 Codex/Claude 原生通信，也不能通过文档或文件充当消息队列。
+- Leader 在注册/派发时仅向有任务协作关系的 Worker 提供经确认的同行原生地址；不确定目标时，Worker 发送一次 `PEER_ROUTE_REQUEST` 请求介绍。
+- Worker 可就已批准范围内的技术细节自由协商，涉及职责归属/公共契约/共享迁移/资源抢占等则通知 Leader 协调。Worker 不可彼此扩权。
+- 审查在 Worker 和 Reviewer 之间直接进行多轮；最终 Reviewer 给 Leader 一次 `REVIEW_VERDICT`，提交者给 Leader 一次独立 `COMPLETE`。Leader 不审查，不做 Reviewer 消息总线。
+- 消息按 `skills/agent-team-bootstrap/references/protocol.md` 的逻辑格式发送（Skill 安装后的对应文件），Codex TUI 尽量每条低于 600 UTF-8 字节。没有 Listener、轮询和后台守护程序。
+
+## 7. 工作消息与响应
 
 | 事件 | 来源 | 接收方的动作 |
 | --- | --- | --- |
