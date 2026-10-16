@@ -74,6 +74,10 @@ Wait for JOIN_ACK; report blockers, interface changes, ready-for-review, and com
 
 A Leader may also delegate to an independent Worker **if** creation is actually exposed and authorized, otherwise it should provide a bootstrap prompt for manual startup. Subagents are not silently substituted for independent sessions.
 
+## Codex TUI message budget
+
+Current Codex TUI source enforces a **1,000-byte UTF-8 prompt limit** on `send_message_to_thread` (`MAX_INPUT_BYTES`). The error `prompt exceeded the maximum context budget` is therefore a **per-message pre-send validation error**, not proof of an exhausted model context window. This Skill uses a conservative **600-byte native message budget**. Send compact events and references to existing artifacts rather than long task briefs. Never build polling or inbox machinery to work around this limit.
+
 ## First-time messaging test
 
 1. Run the Leader bootstrap; check the actual native tools and leader address.
