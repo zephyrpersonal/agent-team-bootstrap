@@ -35,7 +35,7 @@ Worker ID: backend-01
 Created by: human
 Responsibilities: Implement read-only order API and tests; do not edit database migrations.
 Leader target: <exact native Leader thread id / name from Leader startup>
-Use ONLY native cross-session messaging. Send JOIN_REQUEST now, await JOIN_ACK, confirm the exact reporting target, and continue only within approved scope. Report BLOCKED, READY_FOR_REVIEW and completion using native messages.
+Use ONLY native cross-session messaging. Send JOIN_REQUEST now, await JOIN_ACK, confirm the exact reporting target, and continue only within approved scope. Report management blockers and completion to Leader, but send ordinary technical questions and REVIEW_REQUEST directly to authorized Workers/Reviewer by native messages.
 ```
 
 Claude Code: replace the first line with `/agent-team-bootstrap worker` and use actual reachable session name/`@` mention.
@@ -69,7 +69,7 @@ For review, producer sends `REVIEW_REQUEST` directly to its authorized Reviewer.
 1. **Preflight**: Leader reports `READY` or `TRANSPORT_READY_UNTESTED`, an actual native address, and callable send capability (or explicitly fails).
 2. **PING/PONG**: Worker identifies the intended Leader and sends `PING` using its actual native message tool. Leader automatically starts or processes a receiving turn **when supported** and sends `PONG`. Confirm `in_reply_to`.
 3. **JOIN**: Worker sends `JOIN_REQUEST`; Leader verifies responsibilities and returns `JOIN_ACK`; Worker replies `ACK_RECEIVED`. Leader records the Worker with verified identity and responsibility.
-4. **REPORT**: Worker sends `READY_FOR_REVIEW`; Leader sends `REVIEW_REQUEST` to a separate Reviewer Worker, then ends the turn. Reviewer independently inspects evidence and returns `REVIEW_RESULT`; Leader records/routs `REVIEW_OUTCOME` without personally reviewing code.
+4. **P2P REPORT**: Producer sends `REVIEW_REQUEST` directly to assigned Reviewer. Reviewer sends `REVIEW_FEEDBACK` / final `REVIEW_RESULT` directly to producer. Reviewer sends one `REVIEW_VERDICT` to Leader; producer sends a separate `COMPLETE` receipt to Leader. If no reviewer is assigned, producer sends `REVIEWER_NEEDED` to Leader, who introduces one then goes idle.
 5. **Negative check**: If send isn't exposed or receiver isn't reachable, bootstrap must say `NATIVE_MESSAGING_UNAVAILABLE` / `JOIN_PENDING` instead of claiming success.
 
 ## Codex TUI size error
