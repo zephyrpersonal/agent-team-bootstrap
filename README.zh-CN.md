@@ -2,7 +2,7 @@
 
 这是一个为 Codex 与 Claude Code 设计的 **Leader / Worker 多会话协作 Skill**。它不自建文件消息队列，而是要求 Agent 使用各自产品**实际可用的原生跨 Session 通信**。
 
-- **Leader**：识别和登记 Worker 职责、协调任务、接收报告、审查交付。
+- **Leader**：严格只协调。识别和登记 Worker 职责、派发任务、处理原生消息回执、协调依赖并汇总进度；**不直接写代码、测试、审查代码、合并或部署**。待审查工作交给独立 Reviewer Worker。
 - **Worker**：可以由你手动创建，也可以由 Leader 在实际具备创建独立 Session 能力时派发。Worker 会向指定 Leader 发 `JOIN_REQUEST`，收到 `JOIN_ACK` 后建立正式汇报关系。
 - **任务来源无关**：不要求 GitHub Issue 驱动；你、Leader、Worker 或外部平台都可以发起任务。
 - **代码隔离**：修改代码的并行任务建议使用独立 Worktree；Git 与 PR 用于代码和证据，不代替消息通信。
@@ -30,6 +30,10 @@ npx skills add zephyrpersonal/agent-team-bootstrap --list
 `npx skills` 安装完不保证正在运行的旧 Session 自动加载最新规则；建议新开/恢复会话并重新初始化角色。
 
 **Private 仓库说明：** 当前仓库是 Private。在其他电脑使用 `npx skills` 安装前，请先配置有权限访问此仓库的 GitHub 身份认证，例如 `gh auth login` 或 SSH。如果希望任何人都能免授权安装，可以在 GitHub Settings 中改为 Public。
+
+## Leader 的不可越界边界
+
+Leader 不做监听、文件收件箱、轮询、后台守护进程或定时任务。派发任务后结束当前轮次，等待 Worker 通过 Codex / Claude Code 原生跨 Session 消息送来回执。不能自动唤醒时如实报告，不自行搭建机制。没有可用 Worker 或 Reviewer 时向 Owner 报告阻塞，不接管执行。
 
 ## Leader 启动示例
 
