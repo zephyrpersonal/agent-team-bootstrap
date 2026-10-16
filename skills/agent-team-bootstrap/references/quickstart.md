@@ -48,6 +48,22 @@ Tell Leader:
 Prepare a Worker with responsibility 'front-end order list'. If real independent-thread creation is callable and authorized, create it and send the bootstrap prompt; otherwise provide it for manual start. Require JOIN_REQUEST/JOIN_ACK. After dispatch, end the turn and wait for native Worker receipts without polling or listening. Do not do Worker execution yourself.
 ```
 
+## Worker-to-Worker collaboration (no Leader relay)
+
+Once frontend and backend Workers are registered, they can use their **verified peer native addresses** to communicate directly, e.g.:
+
+```text
+P:my-project T:PEER_REQUEST ID:fe3 TO:backend01 Q:final order enum? ACK:1
+```
+
+Backend replies directly:
+
+```text
+P:my-project T:PEER_REPLY ID:be4 RE:fe3 A:pending,paid,cancelled
+```
+
+For review, producer sends `REVIEW_REQUEST` directly to its authorized Reviewer. Reviewer returns feedback and final `REVIEW_RESULT` directly to producer, and sends **one** `REVIEW_VERDICT` to Leader after finalizing. Producer independently sends `COMPLETE` to Leader. Leader should not see intermediate reviews or peer conversations. Missing verified peer target → ask Leader for `PEER_ROUTE_REQUEST` once and await native reply; don't guess targets or use Leader as a message tunnel.
+
 ## Minimum end-to-end acceptance test
 
 1. **Preflight**: Leader reports `READY` or `TRANSPORT_READY_UNTESTED`, an actual native address, and callable send capability (or explicitly fails).
