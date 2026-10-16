@@ -19,7 +19,7 @@ Codex:
 ```text
 $agent-team-bootstrap leader
 Project: <project-name>
-I am the project's Leader. Verify the native messaging tools available in this session. Identify my real native thread ID/address and share the exact join target. Read the project's AGENTS.md and collaboration rules. Do not use file inboxes or spawn subagents to fake existing sessions. When a Worker sends JOIN_REQUEST, process it and reply JOIN_ACK automatically. Report transport status and begin managing workers.
+I am a STRICT coordination-only Leader. Check native messaging once and publish my verified thread address. Read project policy only as needed for coordination. Never edit code, debug, run tests, perform code review, merge, deploy, or take over Worker tasks. Do not create watchers, listeners, polling loops or background jobs; after delegation, end this turn. Process JOIN_REQUEST and Worker receipts only when native messages arrive. Route READY_FOR_REVIEW to an independent Reviewer Worker, then await REVIEW_RESULT without active waiting.
 ```
 
 Claude Code: replace the first line with `/agent-team-bootstrap leader`. Optionally run `/rename project-leader`; ask Claude to show `/list-agents` for the actual address.
@@ -45,7 +45,7 @@ Claude Code: replace the first line with `/agent-team-bootstrap worker` and use 
 Tell Leader:
 
 ```text
-Prepare a Worker with responsibility 'front-end order list'. If real independent thread creation is callable and authorized, create it and send the Worker bootstrap prompt with your exact native Leader address. Otherwise give me the bootstrap prompt for manual start. Require JOIN_REQUEST/JOIN_ACK before counting it active. Do not create a subagent as a substitute for a separate user-owned session.
+Prepare a Worker with responsibility 'front-end order list'. If real independent-thread creation is callable and authorized, create it and send the bootstrap prompt; otherwise provide it for manual start. Require JOIN_REQUEST/JOIN_ACK. After dispatch, end the turn and wait for native Worker receipts without polling or listening. Do not do Worker execution yourself.
 ```
 
 ## Minimum end-to-end acceptance test
@@ -53,7 +53,7 @@ Prepare a Worker with responsibility 'front-end order list'. If real independent
 1. **Preflight**: Leader reports `READY` or `TRANSPORT_READY_UNTESTED`, an actual native address, and callable send capability (or explicitly fails).
 2. **PING/PONG**: Worker identifies the intended Leader and sends `PING` using its actual native message tool. Leader automatically starts or processes a receiving turn **when supported** and sends `PONG`. Confirm `in_reply_to`.
 3. **JOIN**: Worker sends `JOIN_REQUEST`; Leader verifies responsibilities and returns `JOIN_ACK`; Worker replies `ACK_RECEIVED`. Leader records the Worker with verified identity and responsibility.
-4. **REPORT**: Worker sends `READY_FOR_REVIEW` with a test artifact; Leader receives, inspects actual evidence, and returns `REVIEW_RESULT`.
+4. **REPORT**: Worker sends `READY_FOR_REVIEW`; Leader sends `REVIEW_REQUEST` to a separate Reviewer Worker, then ends the turn. Reviewer independently inspects evidence and returns `REVIEW_RESULT`; Leader records/routs `REVIEW_OUTCOME` without personally reviewing code.
 5. **Negative check**: If send isn't exposed or receiver isn't reachable, bootstrap must say `NATIVE_MESSAGING_UNAVAILABLE` / `JOIN_PENDING` instead of claiming success.
 
 ## Troubleshooting 'Worker sent but Leader didn't respond'
