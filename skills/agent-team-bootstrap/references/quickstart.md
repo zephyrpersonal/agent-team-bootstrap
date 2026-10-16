@@ -56,6 +56,10 @@ Prepare a Worker with responsibility 'front-end order list'. If real independent
 4. **REPORT**: Worker sends `READY_FOR_REVIEW`; Leader sends `REVIEW_REQUEST` to a separate Reviewer Worker, then ends the turn. Reviewer independently inspects evidence and returns `REVIEW_RESULT`; Leader records/routs `REVIEW_OUTCOME` without personally reviewing code.
 5. **Negative check**: If send isn't exposed or receiver isn't reachable, bootstrap must say `NATIVE_MESSAGING_UNAVAILABLE` / `JOIN_PENDING` instead of claiming success.
 
+## Codex TUI size error
+
+If `codex_tui.send_message_to_thread` returns `prompt exceeded the maximum context budget`, the current Codex TUI source sets `MAX_INPUT_BYTES = 1_000` and validates the outgoing native prompt **before** delivery. Count **UTF-8 bytes** (Chinese characters often use 3 each), not tokens; keep tool prompt to **600 bytes or fewer** to allow for formatting. Instead of forwarding long instructions, send a concise event and a verified task/PR/document reference. This specific error means the attempted message was not delivered, so re-send a shorter one once. Do not restart or compact the Leader merely to address this message-size failure.
+
 ## Troubleshooting 'Worker sent but Leader didn't respond'
 
 - Claude: check `/list-agents` on both ends; verify target is live and unambiguous. Inspect Leader `/status` `Peer address`, receiver `crossSessionInbound`, pending approval dialogs, and send result. `hold`/`refuse` prevents automatic handling even though the Worker attempted to send.
