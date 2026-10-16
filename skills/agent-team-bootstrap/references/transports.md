@@ -2,6 +2,10 @@
 
 Do not mix these mechanisms or presume availability. **This is a capability guide, not an executable API shim.** Discover actual tool names and call schemas in the runtime.
 
+## Common message size policy
+
+All agents and directions (Leader, Worker, Reviewer; task, peer, review and handshake events) share `DEFAULT_MESSAGE_BUDGET_BYTES = 600` UTF-8 bytes **per native outgoing prompt**, unless the actual callable tool has a stricter limit. This is a Skill operating policy, **not** a claim that all native transports share the same hard-coded limit. Never send large task briefs or logs as messages; send a concise event and an existing readable artifact reference instead. No file or service may be used to simulate delivery.
+
 ## Claude Code → Claude Code
 
 - Native discovery: model tool `ListAgents`; human diagnostic: `/list-agents` or `/peers`.
