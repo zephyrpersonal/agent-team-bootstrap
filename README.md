@@ -4,7 +4,7 @@
 
 A portable **Leader / Worker** collaboration skill for **Codex** and **Claude Code**, built around each product's **native cross-session messaging** rather than file-backed inboxes.
 
-A Worker may be created **manually by the user** or **by the Leader** (when independent-session creation is actually supported). The Worker declares its responsibilities, requests to join a verified Leader session, and reports progress or blockers. The Leader acknowledges membership, tracks each Worker's responsibilities, coordinates shared resources, and reviews deliverables.
+A Worker may be created **manually by the user** or **by the Leader** (when independent-session creation is actually supported). The Worker declares its responsibilities, requests to join a verified Leader session, and reports progress or blockers. The Leader acknowledges membership, tracks each Worker's responsibilities, routes dependencies and review requests, and summarizes Worker receipts. Implementation, testing and code review belong exclusively to Workers (including Reviewer Workers).
 
 > **Important:** This Skill describes and uses native messaging *when the running client exposes it*. It does **not** create an always-on background agent, guarantee wake-up semantics, or bridge Codex and Claude Code automatically.
 
@@ -34,6 +34,10 @@ For other agents or an interactive selection, run `npx skills add zephyrpersonal
 
 This repository is currently **private**. To install on another machine, first authenticate to GitHub (for example with `gh auth login`, Git credential helper, or SSH access to this repository). The Skills CLI supports authenticated private repositories. To let anyone install without GitHub access, change repository visibility to Public in GitHub Settings.
 
+## Strict Leader role
+
+The Leader is a **coordination-only, receipt-driven role**. It does not code, debug, test, inspect source/PR diffs, review implementations, merge, deploy or stand in for a missing Worker. It never launches listeners, watchers, polling loops, timers, scheduled tasks or background processes. After assignment it ends the turn and relies on **native incoming Worker messages** to resume where the host supports it. Review requests are delegated to a separate Reviewer Worker.
+
 ## Start a Leader
 
 Run in a dedicated Codex session or Claude Code session (ideally from a separate, non-coding worktree).
@@ -45,7 +49,7 @@ $agent-team-bootstrap leader
 Project: my-project
 You are the project Leader. Read project policy, detect native cross-session messaging,
 identify and display your real session/thread address, discover existing peers,
-accept verified Worker JOIN_REQUEST messages, and coordinate the project.
+accept verified Worker JOIN_REQUEST messages, and coordinate ONLY. Do not code, test, review or poll; after dispatch return idle and await native receipts.
 Never claim native delivery unless it succeeds, and do not use a file inbox.
 ```
 
