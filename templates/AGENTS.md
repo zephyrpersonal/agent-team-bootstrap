@@ -17,6 +17,14 @@
 - Leader 初始化时允许单次发现真实会话地址；派发任务后结束当前轮次，依赖 Worker 的原生消息回执推动下一轮。接收端不能自动唤醒时如实说明，不自行修补通信运行时。
 - Worker 报告待审查时，Leader 只路由给独立 Reviewer Worker 并等待其回执；不得亲自审查。
 
+## Worker Mesh（点对点协作）
+
+- 同项目经过注册、授权并确认真实 Session 地址的 Worker，可通过原生跨 Session 工具互发 `PEER_REQUEST` / `PEER_REPLY` 等技术消息。Leader 不需要转发、抄送或监听普通技术沟通。
+- 前后端 API 细节、联调、Bug 讨论及 Review 修改轮次由相关 Worker 直接解决；Reviewer 直接给开发 Worker 反馈，最终发送一份 `REVIEW_VERDICT` 给 Leader，开发 Worker 发送独立 `COMPLETE` 回执。
+- 没有 Reviewer 时请求 Leader 指定并介绍一次。没有已验证的同行地址时，向 Leader 请求 `PEER_ROUTE_REQUEST`，但禁止向无关 Thread 群发或让 Leader 代传技术消息。
+- 职责变更、共享资源冲突、跨任务阻塞或影响性接口契约变更才升级 Leader；普通技术细节不需要抄送。Worker 不可相互授予权限或越权更改彼此任务。
+- 点对点消息仍受客户端工具可用性、原生跨产品隔离和 Codex TUI 的保守 600 UTF-8 字节限制约束。
+
 ## 统一原生通信规则
 
 - **必须使用当前 Harness 的原生跨 Session 通信**：Claude Code `ListAgents`/`SendMessage`；Codex 使用当前实际暴露的 `list_threads`/`send_message_to_thread` 等工具。具体能力必须在当前 Session 中检查。
