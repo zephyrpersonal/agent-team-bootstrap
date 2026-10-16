@@ -29,7 +29,7 @@ requires_reply: true
 - P2P may cover technical Q&A, within-contract API decisions, integration, bug feedback and the whole review/fix loop. P2P may **not** reassign tasks, change ownership/access, mutate shared migrations/contracts outside approved scope, approve deployment or bypass Owner decisions.
 - Escalate `BLOCKED`, `SCOPE_CHANGE_REQUEST`, or `COORDINATION_UPDATE` to Leader only when needed for ownership, shared resource, cross-task blocker or high-impact contract change; no routine CC to Leader.
 - Code review: producer → Reviewer `REVIEW_REQUEST`; Reviewer → producer `REVIEW_FEEDBACK` and final `REVIEW_RESULT`. After final review only, Reviewer → Leader `REVIEW_VERDICT` with artifact reference; producer → Leader `COMPLETE`. Leader records both independently and reports outcome. If no Reviewer was assigned, producer → Leader `REVIEWER_NEEDED` once, Leader introduces Reviewer, then goes idle.
-- Prefer **one final notification per decisive event** and avoid redundant relay loops. All peer events must obey Codex TUI's conservative 600 UTF-8 byte budget.
+- Prefer **one final notification per decisive event** and avoid redundant relay loops. All agents and routes (Leader, Worker, Reviewer, P2P and management) use the same global 600 UTF-8 byte message budget.
 
 Compact examples (native `prompt` text, NOT a persistent mailbox):
 
@@ -58,7 +58,10 @@ P:wms T:COMPLETE ID:fe23 TO:leader REF:PR#42
 | `READY_FOR_REVIEW` | Producer → assigned Reviewer | Prefer direct `REVIEW_REQUEST`; use `REVIEWER_NEEDED` → Leader only if no Reviewer exists |
 | `REVIEW_REQUEST` | Producer → Reviewer Worker | Reviewer checks artifacts and replies directly to producer |
 | `REVIEW_RESULT` | Reviewer → Producer | Direct final technical review result; Leader does not relay it |
-| `REVIEW_VERDICT` | Reviewer → Leader | One final independent sign-off receipt |\n| `COMPLETE` | Producer → Leader | Independent completion receipt; Leader checks existence of verdict receipt, not implementation |\n| `PEER_REQUEST` / `PEER_REPLY` | Worker ↔ Worker | Direct authorized technical exchange; Leader not copied |\n| `PEER_ROUTE_REQUEST` / `REVIEWER_NEEDED` | Worker → Leader | Introduce verified contact or assign reviewer only; no content relaying |
+| `REVIEW_VERDICT` | Reviewer → Leader | One final independent sign-off receipt |
+| `COMPLETE` | Producer → Leader | Independent completion receipt; Leader checks existence of verdict receipt, not implementation |
+| `PEER_REQUEST` / `PEER_REPLY` | Worker ↔ Worker | Direct authorized technical exchange; Leader not copied |
+| `PEER_ROUTE_REQUEST` / `REVIEWER_NEEDED` | Worker → Leader | Introduce verified contact or assign reviewer only; no content relaying |
 | `ACK_RECEIVED` / `PONG` | Receiver → sender | No automatic recursive ACK |
 
 ## JOIN_ACK example
@@ -101,9 +104,9 @@ risks:
 requires_reply: true
 ```
 
-## Codex TUI message limits
+## Universal native message budget (all senders)
 
-Codex source currently limits `codex_tui.send_message_to_thread` prompts to **1,000 UTF-8 bytes** and the XML-delegated form to 1,256 bytes. These are bytes, not characters or model tokens. For reliable operation, limit each native Codex TUI message to **600 UTF-8 bytes**. Keep the common event fields only when useful; shortened plaintext is preferred:
+Codex source currently limits `codex_tui.send_message_to_thread` prompts to **1,000 UTF-8 bytes** and the XML-delegated form to 1,256 bytes. These are bytes, not characters or model tokens. Set **DEFAULT_MESSAGE_BUDGET_BYTES = 600** for **every** native message and each agent role (Leader, Worker, Reviewer), including peer and management traffic. This is a common operational safety cap, not a claim that other platforms share Codex's hard limit. If a callable transport exposes a stricter limit, follow that instead. Keep the common event fields only when useful; shortened plaintext is preferred:
 
 ```text
 P:wms T:JOIN_REQUEST ID:b1 FROM:backend-01 ROLE:api LEADER:l1 ACK:1
@@ -113,7 +116,7 @@ P:wms T:READY_FOR_REVIEW ID:b6 REF:PR#42 ACK:1
 
 The real target thread ID is supplied to the native tool, not repeated as a long address in the prompt. Detailed task briefs, diffs, logs and evidence belong in an already accessible artifact; send the reference, **not** the artifact contents. A referenced artifact must actually exist and be accessible. No file is used as a message inbox, no Leader code writing, and no polling.
 
-This exact error, `prompt exceeded the maximum context budget`, is a **pre-send validation rejection**. Shorten before retrying; don't mistake it for a full model context window or an ambiguous delivery failure. Source: https://github.com/openai/codex/blob/main/codex-rs/tui/src/dynamic_tools.rs
+Every sender must count UTF-8 bytes of the native prompt before sending when possible; otherwise err on shorter messages. This exact Codex TUI error, `prompt exceeded the maximum context budget`, is a **pre-send validation rejection**. Shorten before retrying; don't mistake it for a full model context window or an ambiguous delivery failure. Source: https://github.com/openai/codex/blob/main/codex-rs/tui/src/dynamic_tools.rs
 
 ## Coordination-only Leader and idle behavior
 
