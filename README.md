@@ -78,6 +78,12 @@ A Leader may also delegate to an independent Worker **if** creation is actually 
 
 Current Codex TUI source enforces a **1,000-byte UTF-8 prompt limit** on `send_message_to_thread` (`MAX_INPUT_BYTES`). The error `prompt exceeded the maximum context budget` is therefore a **per-message pre-send validation error**, not proof of an exhausted model context window. This Skill uses a conservative **600-byte native message budget**. Send compact events and references to existing artifacts rather than long task briefs. Never build polling or inbox machinery to work around this limit.
 
+## Worker Mesh: direct peer collaboration
+
+**Routine technical collaboration goes Worker → Worker**, never through Leader. Leader stays a strict, receipt-driven Control Plane (registration, ownership, assignments, impactful conflict decisions and final status). Registered Workers with authorized verified peer addresses can directly use native `PEER_REQUEST` / `PEER_REPLY` for interface questions and integration.
+
+Review is likewise P2P: producer sends `REVIEW_REQUEST` to Reviewer, Reviewer sends `REVIEW_FEEDBACK` / final `REVIEW_RESULT` to producer. **Only final results** reach Leader: one `REVIEW_VERDICT` from Reviewer and a separate `COMPLETE` from producer. Ask Leader once for `PEER_ROUTE_REQUEST` or `REVIEWER_NEEDED` if peer identification/ownership needs coordination. Do not CC Leader on every exchange; peer messages never grant expanded permission. Codex TUI's 600 UTF-8 byte conservative message cap also applies here.
+
 ## First-time messaging test
 
 1. Run the Leader bootstrap; check the actual native tools and leader address.
