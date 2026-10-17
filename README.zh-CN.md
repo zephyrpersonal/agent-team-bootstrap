@@ -93,7 +93,8 @@ URL 加上 `?demo=1` 可看脚本化演示。需要 Node.js 20+。可选参数�
 
 - **只读、仅本机**：只读取 `~/.claude/projects` 和 `~/.codex/sessions` 里的会话记录，只监听 `127.0.0.1`，并拒绝其他 `Host` 头。它不是传输通道、收件箱或监听器。
 - **推断而非权威**：消息只取自发出的 `SendMessage` / `send_message_to_thread` 调用（Claude 接收方再加 `<cross-session-message>` 包装）。已关闭的 Session 与空闲无法区分；超过 30 分钟没有活动显示为 STALE。
-- **Codex 支持未经验证**：Codex rollout 解析器按公开格式编写，尚未用真实 rollout 文件核对，Codex Session 会带「format unverified」徽标。
+- **已用真实记录核对**：Codex 0.163.0 的 `send_message_to_thread` 使用 `threadId` / `prompt`；Claude 2.1.296 的接收包装出现在 `queued_command` 附件和带固定前缀的 user 消息中。脱敏 fixture 和验证范围见 [scripts/fixtures/team-dashboard](skills/agent-team-bootstrap/scripts/fixtures/team-dashboard/README.md)。旧版 Codex `event_msg.agent_message` 分支只有合成兼容测试，本地未找到真实样本。
+- **边界限制**：仅读取未压缩的 `.jsonl`。Codex 明确的完成或中断事件会清除待完成工具；缺少结束事件的中断会话仍可能保持 RUNNING，直到 STALE。文件增量按 64 KiB 分块读取，保留一条未完成行；同一 Session 的多个文件合并消息，并采用最新执行快照。
 
 ## 消息限制
 

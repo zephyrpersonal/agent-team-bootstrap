@@ -50,7 +50,8 @@ export function parseClaudeLine(d, ctx) {
   if (d.sessionId && !ctx.session) ctx.session = d.sessionId;
   if (d.cwd) ctx.cwd = d.cwd;
   const ts = Date.parse(d.timestamp) || 0;
-  const c = d.message?.content;
+  const queued = d.type === 'attachment' && d.attachment?.type === 'queued_command';
+  const c = queued ? d.attachment.prompt : d.message?.content;
   const blocks = typeof c === 'string' ? [{ type: 'text', text: c }] : Array.isArray(c) ? c : [];
   for (const b of blocks) {
     if (d.type === 'assistant') {
@@ -59,12 +60,12 @@ export function parseClaudeLine(d, ctx) {
         ev.push({ ts, kind: 'tool_call', callId: b.id, name: b.name, input: b.input });
         if (b.name === 'SendMessage') ev.push({ ts, kind: 'send', to: b.input?.to, body: b.input?.message });
       }
-    } else if (d.type === 'user') {
+    } else if (d.type === 'user' || queued) {
       if (b.type === 'tool_result') ev.push({ ts, kind: 'tool_result', callId: b.tool_use_id });
       else if (b.type === 'text') {
         ev.push({ ts, kind: 'text', role: 'user', text: b.text });
-        // shortcut: wrapper taken from SendMessage's tool description, no real transcript sample yet; fix against one
-        const r = String(b.text).match(/^\s*<cross-session-message\b[^>]*\bfrom="([^"]*)"[^>]*>([\s\S]*?)<\/cross-session-message>/);
+        // Claude 2.1.296 delivers queued attachments or user text with this fixed prefix.
+        const r = String(b.text).match(/^\s*(?:Another Claude session sent a message:\s*)?<cross-session-message\b[^>]*\bfrom="([^"]*)"[^>]*>([\s\S]*?)<\/cross-session-message>/);
         if (r) ev.push({ ts, kind: 'recv', from: r[1], body: r[2] });
       }
     }
@@ -72,7 +73,6 @@ export function parseClaudeLine(d, ctx) {
   return ev;
 }
 
-// shortcut: Codex rollout format unverified locally, fix against a real rollout file
 export function parseCodexLine(d, ctx) {
   const ev = [];
   const ts = Date.parse(d.timestamp) || 0;
@@ -87,13 +87,17 @@ export function parseCodexLine(d, ctx) {
     } else if (p.type === 'function_call') {
       const input = safeJSON(p.arguments);
       ev.push({ ts, kind: 'tool_call', callId: p.call_id, name: p.name, input });
-      if (/send_message_to_thread$/.test(p.name || '')) {
-        ev.push({ ts, kind: 'send', to: input?.thread_id ?? input?.threadId ?? input?.target ?? input?.to, body: input?.prompt });
+      if (/(?:^|\.|__)send_message_to_thread$/.test(p.name || '')) {
+        ev.push({ ts, kind: 'send', to: input?.threadId, body: input?.prompt });
       }
-    } else if (p.type === 'function_call_output') ev.push({ ts, kind: 'tool_result', callId: p.call_id });
+    } else if (p.type === 'custom_tool_call') {
+      ev.push({ ts, kind: 'tool_call', callId: p.call_id, name: p.name, input: { command: p.input } });
+    } else if (p.type === 'function_call_output' || p.type === 'custom_tool_call_output') {
+      ev.push({ ts, kind: 'tool_result', callId: p.call_id });
+    }
   } else if (d.type === 'event_msg') {
     if (p.type === 'task_started') ev.push({ ts, kind: 'turn_start' });
-    else if (p.type === 'task_complete') ev.push({ ts, kind: 'turn_end' });
+    else if (p.type === 'task_complete' || p.type === 'turn_aborted') ev.push({ ts, kind: 'turn_end' });
     else if (p.type === 'agent_message') ev.push({ ts, kind: 'text', role: 'assistant', text: p.message });
   }
   return ev;
@@ -119,10 +123,10 @@ function ingest(rec, ev) {
       break;
     }
     case 'tool_result': s.pending.delete(ev.callId); s.last = 'result'; break;
-    case 'turn_start': s.last = 'busy'; break;
-    case 'turn_end': s.last = 'idle'; break;
+    case 'turn_start': s.turnActive = true; s.last = 'busy'; break;
+    case 'turn_end': s.turnActive = false; s.pending.clear(); s.last = 'idle'; break;
     case 'text':
-      s.last = ev.role === 'assistant' ? 'idle' : 'busy';
+      s.last = ev.role === 'assistant' && !s.turnActive ? 'idle' : 'busy';
       if (ev.role === 'assistant' && ev.text) s.lastText = clip(ev.text, 160);
       break;
     case 'send': {
@@ -140,24 +144,26 @@ function ingest(rec, ev) {
 
 function readNew(rec, size) {
   const fd = fs.openSync(rec.file, 'r');
-  let buf;
   try {
-    // shortcut: whole new tail read into one Buffer, fine below ~1 GB, chunk it if transcripts get bigger
-    const b = Buffer.alloc(size - rec.offset);
-    const n = fs.readSync(fd, b, 0, b.length, rec.offset);
-    rec.offset += n;
-    buf = Buffer.concat([rec.rest, b.subarray(0, n)]);
+    const b = Buffer.alloc(Math.min(64 * 1024, size - rec.offset));
+    const parse = rec.client === 'codex' ? parseCodexLine : parseClaudeLine;
+    while (rec.offset < size) {
+      const n = fs.readSync(fd, b, 0, Math.min(b.length, size - rec.offset), rec.offset);
+      if (!n) break;
+      rec.offset += n;
+      const buf = Buffer.concat([rec.rest, b.subarray(0, n)]);
+      const nl = buf.lastIndexOf(10);
+      // shortcut: retain one incomplete JSONL line; bound line size if malformed logs become a problem.
+      rec.rest = Buffer.from(buf.subarray(nl + 1));
+      if (nl < 0) continue;
+      for (const line of buf.subarray(0, nl).toString('utf8').split('\n')) {
+        if (!line) continue;
+        let d;
+        try { d = JSON.parse(line); } catch { continue; }
+        for (const ev of parse(d, rec.ctx)) ingest(rec, ev);
+      }
+    }
   } finally { fs.closeSync(fd); }
-  const nl = buf.lastIndexOf(10);
-  if (nl < 0) { rec.rest = buf; return; }
-  rec.rest = buf.subarray(nl + 1);
-  const parse = rec.client === 'codex' ? parseCodexLine : parseClaudeLine;
-  for (const line of buf.subarray(0, nl).toString('utf8').split('\n')) {
-    if (!line) continue;
-    let d;
-    try { d = JSON.parse(line); } catch { continue; }
-    for (const ev of parse(d, rec.ctx)) ingest(rec, ev);
-  }
 }
 
 const SENDER_STATE = {
@@ -200,6 +206,11 @@ export function aggregate(recs, project, now) {
       recvAll.push({ m, key: r.key });
     }
   }
+  // Resumed sessions can span files; keep all messages and the most recent execution state.
+  for (const r of recs) {
+    const mi = info.get(r.key);
+    if (mi && r.s.lastTs > mi.r.s.lastTs) mi.r = r;
+  }
   // Join receive records onto sends by message ID; a receive with no local sender stays sender-less.
   for (const { m, key } of recvAll) {
     const msg = m.id != null ? sent.get(m.id) : null;
@@ -210,7 +221,8 @@ export function aggregate(recs, project, now) {
   for (const [k, mi] of info) if (mi.name) byName.set(mi.name, k);
   const stripRef = (s) => String(s ?? '').replace(/\s*\[[^\]]*\]\s*$/, '');
   const resolveTo = (msg) => {
-    let k = msg.toSession || byName.get(msg.to) || byName.get(stripRef(msg.toRaw));
+    const target = `codex:${msg.toRaw}`;
+    let k = msg.toSession || (info.has(target) ? target : null) || byName.get(msg.to) || byName.get(stripRef(msg.toRaw));
     if (!k) {
       const ref = String(msg.toRaw ?? '').match(/\[([0-9a-f]+)\]/)?.[1];
       if (ref) k = [...info.keys()].find((x) => x.split(':')[1].startsWith(ref));
@@ -234,7 +246,7 @@ export function aggregate(recs, project, now) {
       id: key, short: key.split(':')[1].slice(0, 6), client: mi.r.client, cwd: mi.r.ctx.cwd || '',
       workerId: mi.name, name: mi.name || (role === 'Leader' ? 'leader' : key.split(':')[1].slice(0, 6)), role,
       proto: role === 'Leader' ? 'COORDINATING' : 'NONE', exec, tool, lastText: s.lastText,
-      recentTools: s.tools.map((t) => clip(`${t.name}: ${t.summary}`, 80)), lastTs, unverified: mi.r.client === 'codex',
+      recentTools: s.tools.map((t) => clip(`${t.name}: ${t.summary}`, 80)), lastTs,
     });
   }
   const label = (k, fallback) => out.get(k)?.name || fallback || null;
@@ -372,7 +384,7 @@ main{max-width:1000px;margin:0 auto}
 .mouth{fill:none}.frown,.ec,.gear,.zzz,.bang,.conf,.mag,.bubble{display:none}
 .eo{animation:blink 5s infinite;transform-box:fill-box;transform-origin:center}
 @keyframes blink{0%,94%,100%{transform:scaleY(1)}97%{transform:scaleY(.1)}}
-.m-running .gear,.m-idle .zzz,.m-stale .zzz,.m-blocked .bang,.m-complete .conf,.r-reviewer .mag{display:block}
+.m-running .gear,.m-idle .zzz,.m-stale .zzz,.m-blocked .bang,.m-complete .conf,.m-review .mag,.r-reviewer .mag{display:block}
 .m-idle .eo,.m-stale .eo{display:none}.m-idle .ec,.m-stale .ec{display:block}
 .m-blocked .smile{display:none}.m-blocked .frown{display:block}
 .has-tool .bubble{display:block}
@@ -404,21 +416,21 @@ main{max-width:1000px;margin:0 auto}
 .env rect{stroke:var(--line);stroke-width:2.5}.env text{fill:#fff;stroke:none;font-size:10px;font-weight:800;text-anchor:middle}
 .link{stroke:var(--accent);fill:none;opacity:.5;stroke-dasharray:6 8;animation:dash 1.2s linear infinite}
 @keyframes dash{to{stroke-dashoffset:-14}}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(270px,100%),1fr));gap:12px}
 .card{background:var(--panel);border:3px solid var(--card-b);border-radius:18px;padding:12px 14px;min-width:0}
-.card header{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px}.card b{font-size:16px}
+.card header{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px}.card b{font-size:16px;overflow-wrap:anywhere;min-width:0}
 .tag,.pill{font-size:11px;font-weight:800;border-radius:99px;padding:1px 9px;border:2px solid var(--card-b)}
-.tag.claude{background:var(--claude2);color:#2b2540}.tag.codex{background:var(--codex2);color:#2b2540}.tag.warn{background:#fff3bf;color:#7a5b00}
+.tag.claude{background:var(--claude2);color:#2b2540}.tag.codex{background:var(--codex2);color:#2b2540}
 .pill.RUNNING{background:#d3f9d8;color:#1b5e20}.pill.IDLE{background:#e7f5ff;color:#1c4e80}.pill.STALE{background:#e9ecef;color:#495057}.pill.BLOCKED{background:#ffe3e3;color:#a61e1e}
 .pill.proto{background:#f3ecff;color:#4c2a9a}
 .kv{display:flex;gap:8px;font-size:12.5px;margin-top:3px;min-width:0}.kv span{color:var(--muted);flex:none;width:34px}.kv code,.kv i{min-width:0;overflow-wrap:anywhere;font-style:normal}
 .kv code{font:12px ui-monospace,Menlo,monospace}
 #chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
-#chips button{font:inherit;font-size:12px;font-weight:800;border:2px solid var(--card-b);background:var(--panel);color:var(--text);border-radius:99px;padding:2px 10px;cursor:pointer}
+#chips button{font:inherit;font-size:12px;font-weight:800;border:2px solid var(--card-b);background:var(--panel);color:var(--text);border-radius:99px;padding:2px 10px;min-height:44px;cursor:pointer}
 #chips button[aria-pressed=true]{background:var(--accent);color:#fff}
 .tablewrap{overflow-x:auto;background:var(--panel);border:3px solid var(--card-b);border-radius:18px}
 table{border-collapse:collapse;width:100%;font-size:12.5px}th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--card-b);white-space:nowrap}th{color:var(--muted)}
-@media (prefers-reduced-motion:reduce){#stage *{animation:none!important;transition:none!important}.m-stale{opacity:.5}}
+@media (prefers-reduced-motion:reduce){#stage *{animation:none!important;transition:none!important}.m-stale{opacity:.5}.zzz text:first-child,.conf rect{opacity:1}.zzz text:not(:first-child){display:none}.env{display:none}}
 </style></head><body>
 <div class="top"><h1>🏢 Agent Team Office</h1><div id="meta"></div></div>
 <p class="hint">Read-only view inferred from session transcripts · 只读观察，基于 transcript 推断；会话关闭与空闲无法区分（30 分钟无活动记为 STALE）。</p>
@@ -441,7 +453,8 @@ table{border-collapse:collapse;width:100%;font-size:12.5px}th,td{text-align:left
 'use strict';
 var NS='http://www.w3.org/2000/svg';
 var demo=/[?&]demo=1/.test(location.search);
-var reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+var motion=matchMedia('(prefers-reduced-motion: reduce)');
+motion.addEventListener('change',function(e){if(e.matches)envsG.textContent=''});
 var $=function(s){return document.querySelector(s)};
 function el(tag,attrs,parent){var e=document.createElementNS(NS,tag);for(var k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
@@ -494,9 +507,9 @@ function makeChar(s){
   el('path',{d:'M-8 6 Q0 15 8 6','class':'ol mouth smile'},body);
   el('path',{d:'M-8 13 Q0 4 8 13','class':'ol mouth frown'},body);
   g._hat=el('g',{'class':'hat'},body);
-  var mag=el('g',{'class':'mag',transform:'translate(46,22)'},body);
+  var mag=el('g',{'class':'mag'},el('g',{transform:'translate(46,22)'},body));
   el('line',{x1:0,y1:0,x2:10,y2:-18,'class':'ol'},mag);el('circle',{cx:13,cy:-26,r:11,fill:'#e7f5ff','fill-opacity':.7,'class':'ol'},mag);
-  var gear=el('g',{'class':'gear',transform:'translate(-30,-72)'},inner);
+  var gear=el('g',{'class':'gear'},el('g',{transform:'translate(-30,-72)'},inner));
   el('circle',{cx:0,cy:0,r:8,fill:'#adb5bd','class':'ol'},gear);
   for(var i=0;i<6;i++)el('rect',{x:-2.5,y:-13,width:5,height:6,fill:'#adb5bd','class':'ol',transform:'rotate('+(i*60)+')'},gear);
   var z=el('g',{'class':'zzz',transform:'translate(26,-60)'},inner);['z','Z','z'].forEach(function(t){var e=el('text',{x:0,y:0},z);e.textContent=t});
@@ -511,9 +524,16 @@ function makeChar(s){
 }
 
 function layout(list){
+  var width=Math.min(900,$('#stage').clientWidth),p={};
+  if(width<700||list.length>5){
+    var cols=Math.max(1,Math.floor(width/220)),rows=Math.max(1,Math.ceil(list.length/cols));
+    $('#stage').setAttribute('viewBox','0 0 '+width+' '+(rows*240+20));
+    list.forEach(function(s,i){p[s.id]={x:width/cols*(i%cols+.5),y:125+Math.floor(i/cols)*240,grid:true}});
+    return p;
+  }
+  $('#stage').setAttribute('viewBox','0 0 900 440');
   var leader=list.filter(function(s){return s.role==='Leader'})[0];
   var others=list.filter(function(s){return s!==leader});
-  var p={};
   if(leader)p[leader.id]={x:450,y:118};
   others.forEach(function(s,i){
     var t=others.length===1?.5:i/(others.length-1),th=Math.PI*(.12+.76*t);
@@ -535,10 +555,10 @@ function renderStage(st){
     g.style.transform='translate('+pp.x+'px,'+pp.y+'px)';
     var label=clip(tool,26),w=Math.max(40,label.length*6.4+16);
     g._bubT.textContent=label;g._bubR.setAttribute('width',w);
-    g._bub.setAttribute('transform','translate('+(side>0?52:-52-w)+',0)');
-    g._name.textContent=s.name+(s.unverified?' ⚠':'');
+    g._bub.setAttribute('transform',pp.grid?'translate('+(-w/2)+',-45)':'translate('+(side>0?52:-52-w)+',0)');
+    g._name.textContent=clip(s.name,24);
     g._st.textContent=ICON[mode]+' '+(s.exec==='STALE'?'STALE':mode)+(s.proto&&s.proto!=='NONE'?' · '+s.proto:'');
-    var desc=s.name+', '+s.role+', '+s.exec.toLowerCase()+(tool?' '+tool:'')+(s.unverified?' (Codex format unverified)':'');
+    var desc=s.name+', '+s.role+', '+s.exec.toLowerCase()+(tool?' '+tool:'');
     g.setAttribute('aria-label',desc);g._title.textContent=desc;
   });
   Object.keys(chars).forEach(function(id){if(!alive[id]){var g=chars[id];delete chars[id];g.style.opacity=0;setTimeout(function(){g.remove()},700)}});
@@ -572,7 +592,7 @@ function fly(m,delay){
   if(!a||!b)return;
   var target=chars[m.to];
   var done=function(){if(!target)return;target._got=1;target.classList.add('got');setTimeout(function(){target._got=0;target.classList.remove('got')},800)};
-  if(reduce){setTimeout(done,delay);return}
+  if(motion.matches){setTimeout(done,delay);return}
   var dur=m.p2p?1100:1800,t0=null;
   var g=el('g',{'class':'env',opacity:0},envsG);
   var ab=TYPE_ABBR[m.type]||m.type.slice(0,5),w=Math.max(40,ab.length*7+14);
@@ -580,6 +600,7 @@ function fly(m,delay){
   var tx=el('text',{x:0,y:4},g);tx.textContent=ab;
   var x0=a.x,y0=a.y-10,x2=b.x,y2=b.y-10,cx=(x0+x2)/2,cy=Math.min(y0,y2)-90;
   function step(ts){
+    if(motion.matches||!g.isConnected){g.remove();return}
     if(t0===null)t0=ts+delay;
     var t=(ts-t0)/dur;
     if(t<0){requestAnimationFrame(step);return}
@@ -615,7 +636,7 @@ function renderMessages(st){
 function renderCards(st){
   var list=st.sessions.slice().sort(function(a,b){return (b.role==='Leader')-(a.role==='Leader')||a.name.localeCompare(b.name)});
   $('#cards').innerHTML=list.map(function(s){
-    return '<article class="card"><header><b>'+esc(s.name)+'</b><span class="tag">'+esc(s.role)+'</span><span class="tag '+esc(s.client)+'">'+(s.client==='codex'?'Codex':'Claude')+'</span>'+(s.unverified?'<span class="tag warn" title="Codex rollout parsing is not verified against real files">format unverified</span>':'')+'</header>'
+    return '<article class="card"><header><b>'+esc(s.name)+'</b><span class="tag">'+esc(s.role)+'</span><span class="tag '+esc(s.client)+'">'+(s.client==='codex'?'Codex':'Claude')+'</span></header>'
       +'<div><span class="pill '+esc(s.exec)+'">'+esc(s.exec)+'</span> <span class="pill proto">'+esc(s.proto)+'</span></div>'
       +'<div class="kv"><span>cwd</span><code>'+esc(s.cwd||'?')+'</code></div>'
       +'<div class="kv"><span>tool</span><code>'+esc(s.exec==='RUNNING'&&s.tool?s.tool:'—')+'</code></div>'
@@ -635,7 +656,7 @@ function render(st){
 
 // ---- scripted demo (?demo=1): JOIN -> ASSIGN -> PEER -> REVIEW -> COMPLETE, then loops ----
 var demoStep=0,demoSt=null,demoN=0;
-function dsess(id,client,role,name){return {id:id,short:id,client:client,cwd:'/work/'+(name||'leader'),workerId:name,name:name||'leader',role:role,proto:role==='Leader'?'COORDINATING':'NONE',exec:'IDLE',tool:'',lastText:'',recentTools:[],lastTs:Date.now(),unverified:client==='codex'}}
+function dsess(id,client,role,name){return {id:id,short:id,client:client,cwd:'/work/'+(name||'leader'),workerId:name,name:name||'leader',role:role,proto:role==='Leader'?'COORDINATING':'NONE',exec:'IDLE',tool:'',lastText:'',recentTools:[],lastTs:Date.now()}}
 function dmsg(type,from,to,extra){var f=demoSt.sessions.filter(function(s){return s.id===from})[0],t=demoSt.sessions.filter(function(s){return s.id===to})[0];
   var m={ts:Date.now(),type:type,id:'d'+(++demoN),re:null,status:null,ref:null,from:from,to:to,fromLabel:f&&f.name,toLabel:t&&t.name,p2p:!!(f&&t&&f.role!=='Leader'&&t.role!=='Leader')};
   for(var k in extra||{})m[k]=extra[k];demoSt.messages.push(m)}
@@ -663,6 +684,7 @@ function tick(){
     .catch(function(e){$('#meta').textContent='dashboard server unreachable ('+e.message+')'});
 }
 tick();setInterval(tick,demo?2400:3000);
+window.addEventListener('resize',function(){renderStage(lastState)});
 })();
 </script></body></html>
 `;

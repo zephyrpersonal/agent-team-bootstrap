@@ -1,0 +1,192 @@
+{
+  "source": {
+    "date": "2026-10-16T12:55:32.419Z",
+    "cli_version": "0.163.0"
+  },
+  "rows": {
+    "session_meta": {
+      "timestamp": "2026-10-16T12:55:32.419Z",
+      "type": "session_meta",
+      "payload": {
+        "id": "codex-worker",
+        "timestamp": "2026-10-16T12:54:19.488Z",
+        "cwd": "/work/demo",
+        "cli_version": "0.163.0",
+        "source": "vscode",
+        "model_provider": "openai"
+      }
+    },
+    "send": {
+      "timestamp": "2026-10-16T12:59:11.251Z",
+      "type": "response_item",
+      "payload": {
+        "type": "function_call",
+        "status": "completed",
+        "id": "item-demo",
+        "name": "send_message_to_thread",
+        "namespace": "mcp__codex_tui",
+        "arguments": "{\"threadId\": \"codex-leader\", \"prompt\": \"P:wms T:JOIN_REQUEST ID:cx-join FROM:frontend-01\"}",
+        "encrypted_function_args": [],
+        "call_id": "call-send"
+      }
+    },
+    "task_started": {
+      "timestamp": "2026-10-16T12:55:32.421Z",
+      "type": "event_msg",
+      "payload": {
+        "type": "task_started",
+        "turn_id": "turn-demo",
+        "root_turn_id": "turn-demo",
+        "started_at": 1792155332,
+        "model_context_window": 760000,
+        "collaboration_mode_kind": "default"
+      }
+    },
+    "user": {
+      "timestamp": "2026-10-16T12:55:33.626Z",
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "id": "item-demo",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Please inspect the task."
+          },
+          {
+            "type": "input_text",
+            "text": "Please inspect the task."
+          }
+        ]
+      }
+    },
+    "assistant": {
+      "timestamp": "2026-10-16T12:55:41.488Z",
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "status": "completed",
+        "id": "item-demo",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Inspecting the task.",
+            "annotations": [],
+            "logprobs": []
+          }
+        ]
+      }
+    },
+    "task_complete": {
+      "timestamp": "2026-10-16T12:56:05.496Z",
+      "type": "event_msg",
+      "payload": {
+        "type": "task_complete",
+        "root_turn_id": "turn-demo",
+        "turn_id": "turn-demo",
+        "last_agent_message": "Done.",
+        "started_at": 1792155332,
+        "completed_at": 1792155365,
+        "duration_ms": 33133,
+        "time_to_first_token_ms": 6718
+      }
+    },
+    "send_output": {
+      "timestamp": "2026-10-16T12:59:11.416Z",
+      "type": "response_item",
+      "payload": {
+        "type": "function_call_output",
+        "id": "item-demo",
+        "call_id": "call-send",
+        "output": [
+          {
+            "type": "input_text",
+            "text": "Message delivered."
+          },
+          {
+            "type": "input_text",
+            "text": "Message delivered."
+          }
+        ]
+      }
+    },
+    "custom_tool_call": {
+      "timestamp": "2026-10-16T13:06:56.979Z",
+      "type": "response_item",
+      "payload": {
+        "type": "custom_tool_call",
+        "id": "item-demo",
+        "status": "completed",
+        "call_id": "call-patch",
+        "name": "apply_patch",
+        "input": "*** Begin Patch\n*** Add File: demo.txt\n+demo\n*** End Patch"
+      }
+    },
+    "custom_tool_call_output": {
+      "timestamp": "2026-10-16T13:06:57.106Z",
+      "type": "response_item",
+      "payload": {
+        "type": "custom_tool_call_output",
+        "id": "item-demo",
+        "call_id": "call-patch",
+        "output": "Message delivered."
+      }
+    },
+    "turn_aborted": {
+      "timestamp": "2026-10-06T08:54:59.324Z",
+      "type": "event_msg",
+      "payload": {
+        "type": "turn_aborted",
+        "turn_id": "turn-demo",
+        "reason": "interrupted",
+        "started_at": 1791268372,
+        "completed_at": 1791276899,
+        "duration_ms": 8527146
+      }
+    }
+  },
+  "evidence": {
+    "session_meta": {
+      "line": 1,
+      "sha256": "52a669eea96635343a4ea1fa6151ac951273f8df3faebbc6f5d8adc41b1c8c13"
+    },
+    "send": {
+      "line": 53,
+      "sha256": "47d2f7bb7992fcdf2c545ad39dbb0a45e294174cc81208198253185199e16a86"
+    },
+    "task_started": {
+      "line": 2,
+      "sha256": "31a1994849cb20bb04ec00740894c51e5d0e4c6c194855a58425e0b7dffc7809"
+    },
+    "user": {
+      "line": 4,
+      "sha256": "98dcac12d0118d65b20c2604f3475763eadf33d47d9ba305c93a5eb665a346b4"
+    },
+    "assistant": {
+      "line": 13,
+      "sha256": "63703862312a004d750d88eb8f571e99d79f6c0f781040721787e862c97f6951"
+    },
+    "task_complete": {
+      "line": 34,
+      "sha256": "5e40a65f91bfdd4fd991b15449657689bd34ada02dec4e53072df105096afa11"
+    },
+    "send_output": {
+      "line": 56,
+      "sha256": "ac8fbe6a2e3920befbe96cd64f7742df731d1007d952ac7dc08c1eced7b288b1"
+    },
+    "custom_tool_call": {
+      "line": 230,
+      "sha256": "b1251152c84ee5b77438179e87beab26a8566af6e552a477b0642811427e196b"
+    },
+    "custom_tool_call_output": {
+      "line": 234,
+      "sha256": "e84bb9c64af94ea5b08f999a484995d8d625c8159effd4475f3aeb4a4a286d84"
+    },
+    "turn_aborted": {
+      "line": 1546,
+      "sha256": "0a49c724a0d48fd2df2db44bb22b51238fb0ae723a19270f755973dd2d1e8d32"
+    }
+  }
+}

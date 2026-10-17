@@ -54,7 +54,7 @@ description: Bootstrap independent Leader and Worker sessions with native Codex 
 `scripts/team-dashboard.mjs` is a read-only local web page (`node team-dashboard.mjs --project <id>`) that a **human** may run to watch team composition, native message flow and Worker status. It passively reads Claude Code / Codex session transcripts.
 
 - Leader, Worker and Reviewer sessions **must not** start, read, depend on or report to it. It is not a transport, inbox or listener; native receipts remain the only source of confirmed status.
-- Its view is inferred from transcripts (the Codex parser is unverified against real rollout files); idle and closed sessions cannot be told apart.
+- Its view is inferred from transcripts; parsing is checked against real Codex / Claude samples, but idle and closed sessions cannot be told apart. See the repository README for coverage and limitations.
 
 ## Supported invocation
 

@@ -93,7 +93,8 @@ Add `?demo=1` to the URL for a scripted demo. Requires Node.js 20+. Options: `--
 
 - **Read-only and local:** it only reads `~/.claude/projects` and `~/.codex/sessions` transcripts, binds to `127.0.0.1`, and rejects other `Host` headers. It is not a transport, inbox or listener.
 - **Inferred, not authoritative:** envelopes are taken only from outgoing `SendMessage` / `send_message_to_thread` calls (plus the `<cross-session-message>` wrapper on Claude receivers). A session that closed looks the same as an idle one; 30 minutes without activity shows as STALE.
-- **Codex support is unverified:** the Codex rollout parser follows the public format but has not been checked against real rollout files, and Codex sessions carry a "format unverified" badge.
+- **Checked against real transcripts:** Codex 0.163.0 rollouts use `threadId` / `prompt` for `send_message_to_thread`. Claude 2.1.296 receives wrappers in `queued_command` attachments and user messages with a fixed prefix. Sanitized fixtures and the exact coverage are in [scripts/fixtures/team-dashboard](skills/agent-team-bootstrap/scripts/fixtures/team-dashboard/README.md). The legacy Codex `event_msg.agent_message` branch has only a handwritten compatibility test; no local sample was found.
+- **Limits:** only uncompressed `.jsonl` files are read. Explicit Codex completion/interruption clears pending tools; without an end event, an interrupted session can remain RUNNING until STALE. File tails are read in 64 KiB chunks (one incomplete line is retained); split session files share messages and use the latest execution snapshot.
 
 ## Message format and limits
 
