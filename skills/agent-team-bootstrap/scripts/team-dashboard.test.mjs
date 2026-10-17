@@ -59,6 +59,14 @@ test('Claude: sender with a pending Bash call is a RUNNING Worker in JOINING', (
   assert.equal(st.messages[0].type, 'JOIN_REQUEST');
 });
 
+test('LEAVE_REQUEST then LEAVE_ACK marks the Worker LEFT', () => {
+  const f = fixture();
+  f.claude('w1', jl(claudeSend('w1', 0, 'u1', 'P:wms T:LEAVE_REQUEST ID:lv1 FROM:fe-01 REF:branch')));
+  f.claude('l1', jl(claudeSend('l1', 100, 'u2', 'P:wms T:LEAVE_ACK ID:la1 RE:lv1', 'fe-01')));
+  const st = f.tracker().state();
+  assert.equal(st.sessions.find((s) => s.name === 'fe-01').proto, 'LEFT');
+});
+
 test('Codex: tool call + output + task_complete is IDLE; send_message_to_thread envelope is recognised', () => {
   const f = fixture();
   f.codex('a', jl(...['session_meta', 'task_started', 'user', 'assistant', 'send', 'send_output', 'task_complete']

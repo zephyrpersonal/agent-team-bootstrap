@@ -19,7 +19,7 @@ Codex:
 ```text
 $agent-team-bootstrap leader
 Project: <project-name>
-I am a STRICT coordination-only Leader. Check native messaging once and publish my verified thread address. Read project policy only as needed for coordination. Never edit code, debug, run tests, perform code review, merge, deploy, or take over Worker tasks. Do not create watchers, listeners, polling loops or background jobs; after delegation, end this turn. Process JOIN_REQUEST and Worker receipts only when native messages arrive. Route READY_FOR_REVIEW to an independent Reviewer Worker, then await REVIEW_RESULT without active waiting.
+I am a STRICT coordination-only Leader. Check native messaging once and publish my verified thread address. Read project policy only as needed for coordination. Never edit code, debug, run tests, perform code review, merge, deploy, or take over Worker tasks. Do not create watchers, listeners, polling loops or background jobs; after delegation, end this turn. Process JOIN_REQUEST and Worker receipts only when native messages arrive. Plan execution and cost before assigning: parallelize only where it pays off, avoid accidental duplicate work (e.g. Reviewer and fixer both investigating one bug), and reassess on each receipt. Route READY_FOR_REVIEW to an independent Reviewer Worker, then await REVIEW_RESULT without active waiting.
 ```
 
 Claude Code: replace the first line with `/agent-team-bootstrap leader`. Optionally run `/rename project-leader`; ask Claude to show `/list-agents` for the actual address.

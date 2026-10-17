@@ -20,6 +20,8 @@
 
 Leader 不得亲自编码、运行测试、审查源码/PR diff、修复问题、合并或部署。Leader 不得监听、轮询、后台等待、启动 watcher/daemon/timer/webhook 服务或周期性扫描 Worker。启动时可单次发现通信目标；向 Worker 派发后就结束当前轮次。事件只由原生 Worker 消息触发。没有 Worker/Reviewer 时明确报阻塞，绝不越界代做。
 
+Leader 派发前应先定执行方案：串行/并行、每步负责人、预期收益与 token 成本。并行用于范围不同或确需独立意见的场景；避免无意重复劳动（如 Reviewer 与修复 Worker 同时排查同一问题）。每收到回执即重新评估，叫停或调整冗余工作。
+
 ## 3. Transport：原生跨 Session
 
 | 运行环境 | 目标发现 | 发送方式 | 重要限制 |

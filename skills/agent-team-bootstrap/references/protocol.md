@@ -41,6 +41,10 @@ P:wms T:REVIEW_FEEDBACK ID:qa20 RE:fe19 REF:PR#42#comment-3
 P:wms T:REVIEW_RESULT ID:qa21 RE:fe19 STATUS:approved REF:PR#42
 P:wms T:REVIEW_VERDICT ID:qa22 TO:leader STATUS:approved REF:PR#42
 P:wms T:COMPLETE ID:fe23 TO:leader REF:PR#42
+P:wms T:SKILL_REFRESH ID:sr1 TO:fe01 re-invoke agent-team-bootstrap worker, keep ID/task/Leader target
+P:wms T:SKILL_REFRESH_ACK ID:fe30 RE:sr1
+P:wms T:LEAVE_REQUEST ID:fe31 TO:leader REF:branch fe/orders-ui@a1b2c3
+P:wms T:LEAVE_ACK ID:l40 RE:fe31
 ```
 
 ## Events and mandatory response
@@ -62,6 +66,9 @@ P:wms T:COMPLETE ID:fe23 TO:leader REF:PR#42
 | `COMPLETE` | Producer → Leader | Independent completion receipt; Leader checks existence of verdict receipt, not implementation |
 | `PEER_REQUEST` / `PEER_REPLY` | Worker ↔ Worker | Direct authorized technical exchange; Leader not copied |
 | `PEER_ROUTE_REQUEST` / `REVIEWER_NEEDED` | Worker → Leader | Introduce verified contact or assign reviewer only; no content relaying |
+| `SKILL_REFRESH` | Leader → active Worker | Worker reloads installed skill, keeps identity/task, replies `SKILL_REFRESH_ACK`; no install, no re-join |
+| `LEAVE_REQUEST` | Worker → Leader | `LEAVE_ACK`; Leader marks Worker `LEFT`, reassigns unfinished work from the handoff `REF` |
+| `RELEASE` | Leader → Worker | Worker hands off unfinished work, replies `LEAVE_ACK`, then stops team messaging |
 | `ACK_RECEIVED` / `PONG` | Receiver → sender | No automatic recursive ACK |
 
 ## JOIN_ACK example
