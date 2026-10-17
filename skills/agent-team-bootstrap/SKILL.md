@@ -49,6 +49,13 @@ description: Bootstrap independent Leader and Worker sessions with native Codex 
 - **Peer failure:** If peer address/send is unavailable, declare `PEER_UNREACHABLE`; do not silently use Leader as an ad-hoc forwarder. Escalate to Leader **once** only when it blocks assigned work, otherwise report limitation to Owner. Never poll peers or wait in a background loop.
 - **Use the global message budget:** The common 600-byte UTF-8 policy applies to all Worker Mesh and Reviewer events exactly as to control messages. See [references/protocol.md](references/protocol.md) for routing examples.
 
+## Optional human-only dashboard
+
+`scripts/team-dashboard.mjs` is a read-only local web page (`node team-dashboard.mjs --project <id>`) that a **human** may run to watch team composition, native message flow and Worker status. It passively reads Claude Code / Codex session transcripts.
+
+- Leader, Worker and Reviewer sessions **must not** start, read, depend on or report to it. It is not a transport, inbox or listener; native receipts remain the only source of confirmed status.
+- Its view is inferred from transcripts (the Codex parser is unverified against real rollout files); idle and closed sessions cannot be told apart.
+
 ## Supported invocation
 
 - Codex: `$agent-team-bootstrap leader` or `$agent-team-bootstrap worker ...`.

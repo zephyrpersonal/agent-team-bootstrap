@@ -81,6 +81,20 @@ P:my-project T:PEER_REQUEST ID:fe3 Q:订单状态有哪些? ACK:1
 
 代码审查由开发 Worker 直接向 Reviewer 发送 `REVIEW_REQUEST`；Reviewer 直接返回反馈，最后给 Leader 一份 `REVIEW_VERDICT`。开发 Worker 独立发送 `COMPLETE` 回执。
 
+## 团队可视化面板（可选，由人工启动）
+
+一个卡通风格、带动效的本地页面，展示团队成员、Session 之间飞来飞去的原生消息，以及每个 Session 正在做什么（执行工具、空闲、阻塞、审查中、完成）。请自己在已安装的 Skill 目录（或本仓库）里运行，Agent 不会启动它，也不依赖它：
+
+```bash
+node skills/agent-team-bootstrap/scripts/team-dashboard.mjs --project my-project   # 然后打开 http://127.0.0.1:4317/
+```
+
+URL 加上 `?demo=1` 可看脚本化演示。需要 Node.js 20+。可选参数：`--port 4317`、`--since 24h`、`--claude-dir`、`--codex-dir`。
+
+- **只读、仅本机**：只读取 `~/.claude/projects` 和 `~/.codex/sessions` 里的会话记录，只监听 `127.0.0.1`，并拒绝其他 `Host` 头。它不是传输通道、收件箱或监听器。
+- **推断而非权威**：消息只取自发出的 `SendMessage` / `send_message_to_thread` 调用（Claude 接收方再加 `<cross-session-message>` 包装）。已关闭的 Session 与空闲无法区分；超过 30 分钟没有活动显示为 STALE。
+- **Codex 支持未经验证**：Codex rollout 解析器按公开格式编写，尚未用真实 rollout 文件核对，Codex Session 会带「format unverified」徽标。
+
 ## 消息限制
 
 **统一预算为每条原生消息 600 UTF-8 字节，适用于所有角色及通信方向**，包括注册、任务派发、P2P、代码审查和最终汇报。这是 Skill 的保守策略，并不意味着 Codex 和 Claude Code 的底层工具拥有相同的硬限制。

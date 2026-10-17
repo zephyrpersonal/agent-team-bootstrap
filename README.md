@@ -81,6 +81,20 @@ P:my-project T:PEER_REQUEST ID:fe3 Q:order status enum? ACK:1
 
 A producing Worker sends `REVIEW_REQUEST` directly to its assigned Reviewer. The Reviewer returns feedback to that Worker, then sends a final `REVIEW_VERDICT` to the Leader; the producer sends `COMPLETE` independently.
 
+## Team dashboard (optional, human-run)
+
+A cartoon, animated local page shows who is on the team, the native messages flying between sessions, and what each session is doing (running a tool, idle, blocked, in review, complete). Run it yourself from the installed skill directory (or this repo); no agent starts it or depends on it:
+
+```bash
+node skills/agent-team-bootstrap/scripts/team-dashboard.mjs --project my-project   # then open http://127.0.0.1:4317/
+```
+
+Add `?demo=1` to the URL for a scripted demo. Requires Node.js 20+. Options: `--port 4317`, `--since 24h`, `--claude-dir`, `--codex-dir`.
+
+- **Read-only and local:** it only reads `~/.claude/projects` and `~/.codex/sessions` transcripts, binds to `127.0.0.1`, and rejects other `Host` headers. It is not a transport, inbox or listener.
+- **Inferred, not authoritative:** envelopes are taken only from outgoing `SendMessage` / `send_message_to_thread` calls (plus the `<cross-session-message>` wrapper on Claude receivers). A session that closed looks the same as an idle one; 30 minutes without activity shows as STALE.
+- **Codex support is unverified:** the Codex rollout parser follows the public format but has not been checked against real rollout files, and Codex sessions carry a "format unverified" badge.
+
 ## Message format and limits
 
 Use short event messages with a project ID, event type, message ID, and an existing accessible artifact reference when needed. The **600-byte UTF-8 budget applies equally to all senders and directions**, including registration, assignments, P2P, reviews, and final reports. This is a Skill policy, not a universal hard limit of either client.
