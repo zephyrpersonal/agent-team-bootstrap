@@ -2,7 +2,7 @@
 
 Native `SendMessage` and `send_message_to_thread` carry text. The following **logical** schema is a compact convention embedded in the message body; it does not create a new transport or database.
 
-Use clear field labels and a short body; YAML-style plain text is fine. Do not require a YAML parser. `message_id` must be unique within the active collaboration; an ID can be a session-local counter plus session ID or tool-generated UUID. The receiver should use the native sender identity where available rather than trusting a claimed `from` field.
+Use clear field labels and a short body; YAML-style plain text is fine. Do not require a YAML parser. `message_id` must be unique within the active collaboration; an ID can be a session-local counter plus session ID or tool-generated UUID. The receiver should use the native sender identity where available rather than trusting a claimed `from` field. Herdr delivers no sender identity, so on a herdr team `FROM:<herdr agent name>` is **mandatory** in every message: it is the reply address, checked against the roster and trusted only as a peer claim.
 
 ```yaml
 protocol: agent-team/native
@@ -45,6 +45,20 @@ P:wms T:SKILL_REFRESH ID:sr1 TO:fe01 REF:a1b2c3d re-invoke agent-team-bootstrap 
 P:wms T:SKILL_REFRESH_ACK ID:fe30 RE:sr1
 P:wms T:LEAVE_REQUEST ID:fe31 TO:leader REF:branch fe/orders-ui@a1b2c3
 P:wms T:LEAVE_ACK ID:l40 RE:fe31
+P:wms T:LEADER_HANDOFF ID:l50 TO:leader2 E:202610181530 N:3
+P:wms T:LEADER_HANDOFF_ACK ID:m1 RE:l50
+P:wms T:LEADER_CHANGE ID:l51 TO:fe01 NEW:m2/leader2 E:202610181530
+P:wms T:JOIN_REQUEST ID:fe40 TO:leader2 REJOIN:1 E:202610181530 TASK:docs/tasks/17.md STATE:working REF:fe/orders@c3d4 LAST:fe23
+P:wms T:PEER_UPDATE ID:m9 TO:fe01 E:202610181530 OLD:be01 NEW:be02
+P:wms T:STALE_LEADER ID:fe41 RE:l52 E:202610181530 LEADER:m2/leader2
+```
+
+On a herdr team the same events go through `herdr agent prompt <name> '<text>'` and always carry `FROM`:
+
+```text
+P:wms T:PING ID:fe1 FROM:fe01 TO:leader ACK:1
+P:wms T:JOIN_ACK ID:l2 RE:b1 FROM:leader E:202610181200 FO:1 TX:herdr OK:1
+P:wms T:PEER_REQUEST ID:fe12 FROM:fe01 TO:be01 Q:order status enums? ACK:1
 ```
 
 ## Events and mandatory response
@@ -69,6 +83,10 @@ P:wms T:LEAVE_ACK ID:l40 RE:fe31
 | `SKILL_REFRESH` | Leader → active Worker | Worker reloads installed skill (or reads it at `REF` via `git show` if its worktree lacks that commit), keeps identity/task, replies `SKILL_REFRESH_ACK`; no install, no re-join |
 | `LEAVE_REQUEST` | Worker → Leader | `LEAVE_ACK`; Leader marks Worker `LEFT`, reassigns unfinished work from the handoff `REF` |
 | `RELEASE` | Leader → Worker | Worker hands off unfinished work, replies `LEAVE_ACK`, then stops team messaging |
+| `LEADER_HANDOFF` | Old Leader → new Leader | `LEADER_HANDOFF_ACK`; old Leader then sends `LEADER_CHANGE` to each ACTIVE Worker and stands down |
+| `LEADER_CHANGE` | Current Leader, or new Leader on failover (`FO:1`) → Worker | Worker checks it, then `JOIN_REQUEST REJOIN:1` to the new Leader; else `LEADER_CHANGE_PENDING` to its own Owner |
+| `PEER_UPDATE` | Leader → Worker | None; Worker replaces or drops that peer contact |
+| `STALE_LEADER` | Worker → Leader with a lower epoch | None; that Leader stands down and tells its Owner |
 | `ACK_RECEIVED` / `PONG` | Receiver → sender | No automatic recursive ACK |
 
 ## JOIN_ACK example

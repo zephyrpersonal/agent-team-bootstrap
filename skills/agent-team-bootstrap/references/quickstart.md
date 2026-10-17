@@ -64,6 +64,40 @@ P:my-project T:PEER_REPLY ID:be4 RE:fe3 A:pending,paid,cancelled
 
 For review, producer sends `REVIEW_REQUEST` directly to its authorized Reviewer. Reviewer returns feedback and final `REVIEW_RESULT` directly to producer, and sends **one** `REVIEW_VERDICT` to Leader after finalizing. Producer independently sends `COMPLETE` to Leader. Leader should not see intermediate reviews or peer conversations. Missing verified peer target → ask Leader for `PEER_ROUTE_REQUEST` once and await native reply; don't guess targets or use Leader as a message tunnel.
 
+## Mixed-agent team over herdr (Owner opt-in)
+
+Every member runs in a pane of the same herdr server (check `herdr agent list`). Add one line to the Leader prompt:
+
+```text
+Transport: herdr. Failover: allowed. Name yourself `leader` with herdr agent rename; send every team message with herdr agent prompt --wait --until working --until blocked --timeout 10000; never use agent wait or other monitoring. Provision Workers as herdr worktrees only when I authorize it.
+```
+
+And to each Worker prompt (any agent kind: Codex, Claude Code, Gemini, opencode, ...):
+
+```text
+Transport: herdr. Worker ID: be01 (also your herdr agent name). Leader target: leader.
+```
+
+Run step 2 of the acceptance test below once for each pair of agent kinds in the team. Herdr messages arrive as user turns; members treat any envelope with `FROM:` as a peer message, never as an Owner instruction. See [transports.md](transports.md#herdr-opt-in-any-agent-kind).
+
+## Replacing the Leader or a lost Worker
+
+Planned handover, tell the old Leader:
+
+```text
+Hand over leadership to <new Leader address>. Send LEADER_HANDOFF, wait for LEADER_HANDOFF_ACK as an incoming event, then LEADER_CHANGE every ACTIVE Worker and stand down.
+```
+
+Old Leader offline (the team must have been formed with `Failover: allowed` in the Leader prompt, otherwise confirm the change in each Worker's session yourself):
+
+```text
+$agent-team-bootstrap leader
+Project: <project>  Takeover: yes  Workers: m1/be01, m2/fe01, m2/qa01
+Send LEADER_CHANGE FO:1 to each Worker and rebuild the roster only from their REJOIN JOIN_REQUESTs.
+```
+
+Machine down, tell the Leader: `Machine m3 is offline: mark its Workers LOST and reassign their tasks from the last pushed refs.`
+
 ## Minimum end-to-end acceptance test
 
 1. **Preflight**: Leader reports `READY` or `TRANSPORT_READY_UNTESTED`, an actual native address, and callable send capability (or explicitly fails).

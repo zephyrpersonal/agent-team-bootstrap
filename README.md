@@ -10,6 +10,7 @@
 - **Worker Mesh:** registered Workers communicate directly for implementation questions, API contracts, integration and bug fixes, without routing routine messages through the Leader.
 - **Peer code review:** Reviewer and producing Worker exchange feedback directly. Only final review verdict and completion receipts reach the Leader.
 - **Native session transport:** uses actual supported Codex or Claude Code peer messaging tools; no custom mailbox, daemon, listener, or timer.
+- **Optional herdr transport:** when the Owner opts in, members in [herdr](https://herdr.dev/) panes message each other with `herdr agent prompt`, so one team can mix Codex, Claude Code, Gemini, opencode and other agent kinds. A herdr team is herdr-only (no native messages, every member in a herdr pane) and also uses herdr for bounded delivery receipts, Owner-requested live status, Owner notifications and worktree-per-Worker provisioning.
 - **Role registration:** `JOIN_REQUEST` / `JOIN_ACK` / `ACK_RECEIVED` establish verified peer identities and responsibilities.
 - **One message budget for all agents:** every native message from Leader, Worker, or Reviewer follows a conservative **600 UTF-8 byte** operating budget. Actual transport limits may differ.
 - **Project-independent:** task source, repository, worktree layout, and issue tracker are not prescribed.
@@ -94,6 +95,16 @@ A producing Worker sends `REVIEW_REQUEST` directly to its assigned Reviewer. The
 
 A Worker hands off unfinished work, sends `LEAVE_REQUEST` with a handoff reference, and the Leader replies `LEAVE_ACK` and marks it `LEFT`. To retire a Worker, the Leader sends `RELEASE`; the Worker hands off and replies `LEAVE_ACK`. A `LEFT` Worker receives no further assignments and must `JOIN_REQUEST` again to return.
 
+### Replacing the Leader or a lost Worker
+
+One Leader per team at a time, but both roles can be replaced, e.g. when you switch devices or a machine goes offline:
+
+- **Planned handover:** the old Leader sends `LEADER_HANDOFF` to the new one, then `LEADER_CHANGE` to every Worker and stands down. Workers rejoin the new Leader with their task, pushed branch and last receipt, so the new Leader rebuilds the roster from them.
+- **Failover:** if the old Leader is offline, a new Leader started with `Takeover` sends `LEADER_CHANGE FO:1`. Workers accept it only if you wrote `Failover: allowed` when forming the team and their old Leader is unreachable; otherwise you confirm it in each Worker's session.
+- **Fencing:** every Leader term has an epoch (`E:<UTC yyyymmddhhmm>`). A Leader that comes back after a failover gets `STALE_LEADER` and stands down.
+- **Lost Worker:** when a machine is down the Leader marks its Workers `LOST`, reassigns their tasks from the last pushed refs on new branches, and updates affected peers. On multi-machine teams Workers push their branch at each milestone.
+- **Switching your own device** needs nothing if the agents run on always-on hosts: attach to their herdr server from any device.
+
 ## Team dashboard (optional, human-run)
 
 A cartoon, animated local page shows who is on the team, the native messages flying between sessions, and what each session is doing (running a tool, idle, blocked, in review, complete). Run it yourself from the installed skill directory (or this repo); no agent starts it or depends on it:
@@ -105,7 +116,7 @@ node skills/agent-team-bootstrap/scripts/team-dashboard.mjs --project my-project
 Add `?demo=1` to the URL for a scripted demo. Requires Node.js 20+. Options: `--port 4317`, `--since 24h`, `--claude-dir`, `--codex-dir`.
 
 - **Read-only and local:** it only reads `~/.claude/projects` and `~/.codex/sessions` transcripts, binds to `127.0.0.1`, and rejects other `Host` headers. It is not a transport, inbox or listener.
-- **Inferred, not authoritative:** envelopes are taken only from outgoing `SendMessage` / `send_message_to_thread` calls (plus the `<cross-session-message>` wrapper on Claude receivers). A session that closed looks the same as an idle one; 30 minutes without activity shows as STALE.
+- **Inferred, not authoritative:** envelopes are taken only from outgoing `SendMessage` / `send_message_to_thread` calls (plus the `<cross-session-message>` wrapper on Claude receivers). A session that closed looks the same as an idle one; 30 minutes without activity shows as STALE. Herdr-transport messages and other machines' sessions are not shown; after a Leader change both Leaders show a crown.
 - **Checked against real transcripts:** Codex 0.163.0 rollouts use `threadId` / `prompt` for `send_message_to_thread`. Claude 2.1.296 receives wrappers in `queued_command` attachments and user messages with a fixed prefix. Sanitized fixtures and the exact coverage are in [scripts/fixtures/team-dashboard](skills/agent-team-bootstrap/scripts/fixtures/team-dashboard/README.md). The legacy Codex `event_msg.agent_message` branch has only a handwritten compatibility test; no local sample was found.
 - **Limits:** only uncompressed `.jsonl` files are read. Explicit Codex completion/interruption clears pending tools; without an end event, an interrupted session can remain RUNNING until STALE. File tails are read in 64 KiB chunks (one incomplete line is retained); split session files share messages and use the latest execution snapshot.
 
@@ -125,6 +136,9 @@ Store extensive task descriptions, logs and diffs in accessible project artifact
 | Codex Desktop | Uses callable thread discovery and `send_message_to_thread` where available |
 | Codex CLI | Depends on the tools exposed in the active session |
 | Codex ↔ Claude Code | No direct native cross-provider messaging |
+| Any agent kind in herdr | `herdr agent prompt` (Owner opt-in, whole team) |
+
+**Herdr trade-off:** a herdr message is typed into the receiver's input box, so it arrives as a user turn without native sender identity, and Claude's `crossSessionInbound` gate does not apply. Members treat envelopes with `FROM:` as peer messages at peer trust; anything on the same herdr server can prompt any agent. Behaviour when the receiver is mid-turn varies by agent kind, so test `PING` / `PONG` for each pair of kinds. See [transports.md](skills/agent-team-bootstrap/references/transports.md#herdr-opt-in-any-agent-kind).
 
 Sending a message does not guarantee receipt, acceptance, or automatic wake-up. Verify `PING` / `PONG` and registration before relying on a team. If native send is unavailable, the Skill reports the limitation instead of starting a custom relay or listener.
 
