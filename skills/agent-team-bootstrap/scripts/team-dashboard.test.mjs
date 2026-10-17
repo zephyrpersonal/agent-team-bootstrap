@@ -228,9 +228,9 @@ test('server enforces Host guard and serves valid, responsive inline UI', async 
     for (const width of [288, 335, 640, 900]) {
       for (const count of [0, 1, 4, 6, 8, 12]) {
         let bounds;
-        const stage = { clientWidth: width, setAttribute: (_, value) => { bounds = value.split(' ').map(Number); } };
+        const stage = { clientWidth: width, setAttribute: (name, value) => { if (name === 'viewBox') bounds = value.split(' ').map(Number); } };
         const sessions = Array.from({ length: count }, (_, i) => ({ id: String(i), role: i ? 'Worker' : 'Leader' }));
-        const positions = Object.values(runInNewContext(layout + '; layout(sessions)', { $: () => stage, sessions }));
+        const positions = Object.values(runInNewContext(layout + '; layout(sessions)', { $: () => stage, stage, sessions }));
         assert.equal(positions.length, count);
         for (const p of positions) {
           assert.ok(p.x >= 60 && p.x <= bounds[2] - 60, 'character fits stage width');
