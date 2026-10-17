@@ -38,6 +38,15 @@ npx skills add zephyrpersonal/agent-team-bootstrap --list
 
 安装或更新后，建议开启新 Session 或重新加载角色指令。项目特有约束可以写在 `AGENTS.md` / `CLAUDE.md` 中，但不需要额外复制通用协作模板。
 
+### 升级运行中的团队
+
+已运行的 Session 保留其加载时的 Skill 内容，磁盘文件更新不会影响它们。
+
+1. 更新安装副本：重新执行上面的安装命令（全局安装带 `-g`；项目安装在项目根目录执行、不带 `-g`）。项目安装需将更新后的 `.agents/skills/` / `.claude/skills/` 提交到默认分支。
+2. 告诉 Leader「Skill 已升级」（项目安装附上该提交）。Leader 重新加载 Skill，并向每个在队 Worker 发送 `SKILL_REFRESH`（项目安装附 `REF:<commit>`）。Worker 保留 ID、任务与 Leader 地址重新加载，回复 `SKILL_REFRESH_ACK`。若 Worker 的工作区早于 `REF`，用 `git show` 读取新版 Skill，不合并分支。
+
+Agent 不会因对端消息执行安装命令。
+
 ## 使用方法
 
 ### 启动 Leader
@@ -80,6 +89,10 @@ P:my-project T:PEER_REQUEST ID:fe3 Q:订单状态有哪些? ACK:1
 ```
 
 代码审查由开发 Worker 直接向 Reviewer 发送 `REVIEW_REQUEST`；Reviewer 直接返回反馈，最后给 Leader 一份 `REVIEW_VERDICT`。开发 Worker 独立发送 `COMPLETE` 回执。
+
+### 退出团队
+
+Worker 交接未完成工作后发送 `LEAVE_REQUEST`（附交接引用），Leader 回复 `LEAVE_ACK` 并标记为 `LEFT`。Owner 要停用某个 Worker 时，由 Leader 发送 `RELEASE`，Worker 交接后回复 `LEAVE_ACK`。`LEFT` 的 Worker 不再接收任务，回归需重新 `JOIN_REQUEST`。
 
 ## 团队可视化面板（可选，由人工启动）
 

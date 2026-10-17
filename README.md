@@ -38,6 +38,15 @@ npx skills add zephyrpersonal/agent-team-bootstrap --list
 
 After installation or updates, start a new session or reload role instructions. Optional project-specific rules may be kept in `AGENTS.md` or `CLAUDE.md`; the Skill does not require copying collaboration templates into every project.
 
+### Upgrading running teams
+
+Running sessions keep the skill text they loaded; updating files on disk does not change them.
+
+1. Update the installed copy: rerun the install command above (with `-g` for global, without it in the project root for a project install). For a project install, commit the updated `.agents/skills/` / `.claude/skills/` files to the default branch.
+2. Tell the Leader "skill upgraded" (plus the commit for a project install). The Leader reloads the skill and sends each active Worker `SKILL_REFRESH` (with `REF:<commit>` for a project install). Each Worker reloads, keeping its ID, task and Leader target, and replies `SKILL_REFRESH_ACK`. A Worker whose worktree predates `REF` reads the new skill with `git show` instead of merging.
+
+Agents never run the install command on a peer's request.
+
 ## Quick start
 
 ### Start a Leader
@@ -80,6 +89,10 @@ P:my-project T:PEER_REQUEST ID:fe3 Q:order status enum? ACK:1
 ```
 
 A producing Worker sends `REVIEW_REQUEST` directly to its assigned Reviewer. The Reviewer returns feedback to that Worker, then sends a final `REVIEW_VERDICT` to the Leader; the producer sends `COMPLETE` independently.
+
+### Leaving the team
+
+A Worker hands off unfinished work, sends `LEAVE_REQUEST` with a handoff reference, and the Leader replies `LEAVE_ACK` and marks it `LEFT`. To retire a Worker, the Leader sends `RELEASE`; the Worker hands off and replies `LEAVE_ACK`. A `LEFT` Worker receives no further assignments and must `JOIN_REQUEST` again to return.
 
 ## Team dashboard (optional, human-run)
 

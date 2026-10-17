@@ -111,6 +111,9 @@ Worker 接收并发送 `ACK_RECEIVED` 后，Leader 才将其标记为 ACTIVE。
 | `PEER_REQUEST` / `PEER_REPLY` | Worker ↔ Worker | 技术交流直达对端，不抄送 Leader |
 | `COMPLETE` | Worker | Leader 根据真实证据验收；不得自动合并 |
 | `SCOPE_CHANGE_REQUEST` | Worker | Leader 校验 Owner 约束并协调职责 |
+| `SKILL_REFRESH` | Leader | Worker 仅接受已验证 Leader 的请求，保留 ID/任务/地址重新加载 Skill（工作区早于 `REF` 时用 `git show` 读取），回 `SKILL_REFRESH_ACK`；不执行安装 |
+| `LEAVE_REQUEST` | Worker | 交接后发送；Leader 回 `LEAVE_ACK`，标记 `LEFT` 并按需重新分配未完成工作 |
+| `RELEASE` | Leader | Worker 交接未完成工作后回 `LEAVE_ACK`，之后停止团队通信 |
 
 每个关键消息包含 `project`、`message_id`、`type`、发送/接收身份、`task`（如有）、简要结论、证据链接、`requires_reply`。必须区别：`SENT`、`ACKNOWLEDGED`、`ACCEPTED`、`REVIEWED`、`MERGED`。
 
@@ -118,6 +121,7 @@ Worker 接收并发送 `ACK_RECEIVED` 后，Leader 才将其标记为 ACTIVE。
 
 ## 7. 恢复与故障处理
 
+- Skill 升级后，Owner 通知 Leader；Leader 重新加载并向在队 Worker 发送 `SKILL_REFRESH`。`LEFT` 的 Worker 不再接收任何团队消息，回归需重新 `JOIN`。
 - Session 恢复后读取项目规则、已配置的任务与产物记录，用原生发现确认 peer 是否仍在线；必要时要求 Worker 对新 Leader 地址重新 `JOIN`。
 - 默认不假设 Skill 自带守护进程、自动重启或超越原生运行时的可用性。Claude Code 可在 idle 时自动处理**成功投递**的消息；Codex 的自动唤醒需根据当前产品能力验证。
 - Claude 未响应：检查双方 `/list-agents`、接收方 `/status`、`crossSessionInbound`、待批准消息与发送结果。

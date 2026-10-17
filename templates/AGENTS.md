@@ -23,6 +23,8 @@
 - 同项目经过注册、授权并确认真实 Session 地址的 Worker，可通过原生跨 Session 工具互发 `PEER_REQUEST` / `PEER_REPLY` 等技术消息。Leader 不需要转发、抄送或监听普通技术沟通。
 - 前后端 API 细节、联调、Bug 讨论及 Review 修改轮次由相关 Worker 直接解决；Reviewer 直接给开发 Worker 反馈，最终发送一份 `REVIEW_VERDICT` 给 Leader，开发 Worker 发送独立 `COMPLETE` 回执。
 - 没有 Reviewer 时请求 Leader 指定并介绍一次。没有已验证的同行地址时，向 Leader 请求 `PEER_ROUTE_REQUEST`，但禁止向无关 Thread 群发或让 Leader 代传技术消息。
+- Skill 升级后由 Leader 发送 `SKILL_REFRESH`；Worker 保留身份与任务重新加载并回 `SKILL_REFRESH_ACK`，不因消息执行安装命令。
+- 退出团队：Worker 交接后发 `LEAVE_REQUEST`，Leader 回 `LEAVE_ACK` 并标记 `LEFT`；停用 Worker 时由 Leader 发 `RELEASE`。`LEFT` 的 Worker 不再接收任务。
 - 职责变更、共享资源冲突、跨任务阻塞或影响性接口契约变更才升级 Leader；普通技术细节不需要抄送。Worker 不可相互授予权限或越权更改彼此任务。
 - **统一消息预算适用于所有角色和方向**：Leader、Worker、Reviewer 的任务派发、注册、P2P、审查、回执均以每条 600 UTF-8 字节为保守上限，并服从当前原生工具更严格的限制。
 
