@@ -7,12 +7,22 @@ It is **not** a message channel. Messages still go through the team transport; n
 ## Location
 
 - A dedicated branch `team/<project>` in the project's Git remote. It is never merged into the default branch and never opened as a PR. A project may configure an issue tracker instead (`AGENTS.md`); then the same files map to issues and the pinned ref is the issue URL plus its edit time.
-- The Leader keeps it in a separate worktree, not in any code checkout:
+- The Leader needs no project code, only push access to the remote. Resolve the location once at startup, first match wins:
+  1. A location the project configured (`AGENTS.md`: issue tracker, or a separate ledger repository).
+  2. `Ledger: <git url>` in the Leader prompt: a separate repository holding only ledgers, branch `team/<project>`. Use it when the Leader has no access to the project repository; Workers need read access to it.
+  3. The project remote, from `Repo: <git url>` in the Leader prompt or the Leader's own checkout.
+  4. None of these, or no push access → report `LEDGER_UNAVAILABLE` to the Owner and run without a ledger: roster in the session, briefs written by the Owner or a scout Worker as pushed artifacts. Warn that compaction or a Leader change can then lose mission state.
+- The Leader keeps the ledger in its own directory with only the ledger branch checked out, never inside a code checkout:
 
   ```bash
-  git fetch origin
-  git worktree add ../<repo>-team team/<project>               # branch exists
-  git worktree add --orphan -b team/<project> ../<repo>-team   # first mission (git 2.42+)
+  # Leader workspace without project code
+  git clone --single-branch -b team/<project> <url> <ledger-dir>      # branch exists
+  git init <ledger-dir> && git -C <ledger-dir> remote add origin <url> \
+    && git -C <ledger-dir> checkout --orphan team/<project>             # first mission; push with -u origin team/<project>
+
+  # Leader that already has a project checkout
+  git worktree add ../<repo>-team team/<project>                        # branch exists
+  git worktree add --orphan -b team/<project> ../<repo>-team            # first mission (git 2.42+)
   ```
 
 - Only the current-epoch Leader commits and pushes to it, and never force-pushes. If a push is rejected, fetch and read `roster.md`: a higher epoch there means another Leader took over, so stand down and tell the Owner; otherwise rebase the ledger commit and push again.
@@ -24,6 +34,9 @@ It is **not** a message channel. Messages still go through the team transport; n
   git show <sha>:wp/17.md
   ```
 
+  With a separate ledger repository, `JOIN_ACK` carries `LG:<url>` once; Workers fetch from that URL (`git fetch <url> team/<project>`, then `git show <sha>:wp/17.md`).
+- Reports the Leader must read (scout reports, final summaries) go where the Leader can read them: the project remote if it has access, otherwise a PR/issue comment or a path the Owner named. The Leader never needs a code checkout to read them.
+
 ## Pinned references
 
 Every `ASSIGN` / `REDIRECT` that points into the ledger uses `REF:team/<project>@<sha>:<path>` (e.g. `REF:team/wms@3f9c2e1:wp/17.md`). Commit and push first, then send. A Worker reads exactly that version, so a later edit cannot silently change its brief; a changed brief needs a new `REDIRECT` with a new ref.
@@ -32,8 +45,8 @@ Every `ASSIGN` / `REDIRECT` that points into the ledger uses `REF:team/<project>
 
 | File | Content |
 |---|---|
-| `mission.md` | Goal, non-goals, constraints, acceptance criteria, assumptions, open questions, status (`INTAKE` / `PLANNED` / `APPROVED` / `RUNNING` / `REPORTED` / `CLOSED`) |
-| `plan.md` | Work package table: id, title, owner, depends on, parallel group, reviewer, `DUE`, status, receipt IDs |
+| `missions/<id>.md` | One per mission: goal, non-goals, constraints, acceptance criteria, assumptions, open questions, priority (`P0` hotfix / `P1` / `P2`), status (`INTAKE` / `PLANNED` / `APPROVED` / `RUNNING` / `REPORTED` / `CLOSED`) |
+| `plan.md` | Work package table across missions: id, mission, priority, title, owner, depends on, parallel group, reviewer, `DUE`, status (incl. `PAUSED`), receipt IDs |
 | `wp/<id>.md` | One work package brief (template below) |
 | `roster.md` | Members: id, address (`<machine>/<name>` on herdr), agent kind, session, `created_by`, role, workspace, state (`ACTIVE` / `AFK` / `LOST` / `LEFT`), current package, authorized peer contacts, last received receipt ID; Leader epoch `E`, `FO`, transport |
 | `decisions.md` | Owner answers (`BY:owner`) and delegated decisions (`BY:profile` / `BY:decision:<id>`), dated, with reason |
@@ -43,7 +56,8 @@ Every `ASSIGN` / `REDIRECT` that points into the ledger uses `REF:team/<project>
 
 ```markdown
 # WP-<id>: <title>
-Mission: mission.md@<sha>   Owner: <worker>   Reviewer: <worker|none>
+Mission: missions/<mid>.md   Priority: P1   Owner: <worker>   Reviewer: <worker|none>
+Base: <branch or tag to start from>   Peers: <workers you may coordinate with>   Consult: <workers you may ask, max N questions>
 
 ## Goal
 One or two sentences: what changes for the user/system when this is done.
@@ -74,12 +88,14 @@ DUE: <UTC time>   ROUNDS: <max review rounds>
 Specific triggers beyond the defaults (over budget, non-goal touched, contract change).
 ```
 
+A **hotfix** package (priority `P0`) branches from the deployed base (default branch or release tag), never from a feature branch. Non-goals always include refactoring and anything from running feature missions; `ROUNDS` is 1–2; `Consult` names at most one feature Worker with a two-question budget; acceptance is "reproduction fixed, regression test added, touched areas listed in `COMPLETE`".
+
 A **scout** package has a read-only goal and a report deliverable (affected areas, risks, suggested split, contracts to fix first); its acceptance criterion is "the Leader can plan from it".
 
 ## Mission template
 
 ```markdown
-# Mission: <title>   Status: INTAKE
+# Mission <id>: <title>   Priority: P1   Status: INTAKE
 Owner request (verbatim or quoted summary): ...
 Goal (restated): ...
 Non-goals: ...
@@ -104,6 +120,7 @@ Recurring decisions: (e.g. naming, error handling, UI conventions)
 
 ## Delegated authority (Owner-edited only)
 The Leader may decide on my behalf:
+- e.g. provision a hotfix Worker in its own worktree for a P0 mission
 - ...
 Never delegated: destructive actions, deploys, access control, merges, scope beyond the mission.
 ```

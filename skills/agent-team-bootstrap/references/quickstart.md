@@ -19,7 +19,7 @@ Codex:
 ```text
 $agent-team-bootstrap leader
 Project: <project-name>
-Follow references/leader.md. Check native messaging once and publish my verified thread address. Keep the team ledger on branch team/<project-name>. For each goal I give: restate it as mission.md and ask me at most three questions; scout first if you need codebase knowledge; show me multi-package plans before dispatch; assign with pinned ledger refs; keep Workers on brief; finish with one final report and close the team when I accept. Never code, test, review code, merge, deploy, monitor or take over Worker tasks.
+Follow references/leader.md. Check native messaging once and publish my verified thread address. Keep the team ledger on branch team/<project-name> of Repo: <git url> (or Ledger: <ledger repo url>); you need no project code checkout. For each goal I give: restate it as a mission (missions/<id>.md, with priority) and ask me at most three questions; scout first if you need codebase knowledge; show me multi-package plans before dispatch; assign with pinned ledger refs; keep Workers on brief; finish with one final report and close the team when I accept. Never code, test, review code, merge, deploy, monitor or take over Worker tasks.
 ```
 
 Claude Code: replace the first line with `/agent-team-bootstrap leader`. Optionally run `/rename project-leader`; ask Claude to show `/list-agents` for the actual address.
@@ -95,6 +95,8 @@ $agent-team-bootstrap leader
 Project: <project>  Takeover: yes  Workers: m1/be01, m2/fe01, m2/qa01
 Send LEADER_CHANGE FO:1 to each Worker and rebuild the roster only from their REJOIN JOIN_REQUESTs.
 ```
+
+Hotfix while a feature mission runs, tell the Leader: `P0 hotfix: checkout returns 500 for coupons since v2.3.1. Base: tag v2.3.1.` It opens a separate P0 mission, staffs an idle or new hotfix Worker (if your owner.md delegates that) before pausing any feature Worker, and limits consultation of feature Workers to the brief's `Consult` budget.
 
 Going offline for a while, tell the Leader: `Send AFK UNTIL:0930 to all Workers.` On return: `Send BACK to all Workers.` If the Leader vanished without `AFK`, Workers notice on their next send, hold receipts and notify you; resuming it and sending `BACK` replays them.
 

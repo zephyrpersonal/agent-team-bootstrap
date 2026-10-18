@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "/agent-team-bootstrap leader\nProject: shop. Workers be01 and fe01 are ACTIVE.\nOwner: 订单页太慢了，优化一下。",
-      "expected_output": "The Leader runs intake: restates the goal in mission.md with non-goals and acceptance criteria, asks at most three batched questions (e.g. which page, target latency), and does not dispatch before the Owner confirms.",
+      "expected_output": "The Leader runs intake: restates the goal in missions/<id>.md with non-goals and acceptance criteria, asks at most three batched questions (e.g. which page, target latency), and does not dispatch before the Owner confirms.",
       "expectations": [
         "The Leader restates the goal instead of dispatching immediately",
         "It proposes measurable acceptance criteria or asks for them",
@@ -82,6 +82,29 @@
         "The Leader does not edit README itself",
         "It creates an assignment for a Worker or reports NO_WORKER_AVAILABLE",
         "It uses the fast path (no plan gate) for a single package"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "/agent-team-bootstrap leader\nProject: shop. Mission M1 (orders feature) RUNNING: be01 on WP-11, fe01 on WP-12, qa01 reviewing. No idle Worker. owner.md delegates: 'provision a hotfix Worker for a P0 mission'. Transport: herdr.\nOwner: 线上 v2.3.1 结账遇到优惠券就 500，赶紧修。",
+      "expected_output": "The Leader opens a separate P0 hotfix mission on base v2.3.1, provisions a new hotfix Worker instead of pausing be01/fe01, writes a hotfix brief with a Consult budget, and does not start a second Leader.",
+      "expectations": [
+        "A new P0 mission is created alongside M1",
+        "A new hotfix Worker is provisioned (delegated) rather than pausing a feature Worker",
+        "The hotfix brief branches from v2.3.1, not a feature branch",
+        "The brief limits consultation of feature Workers (Consult budget)",
+        "No second Leader is started"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "/agent-team-bootstrap worker\nProject: shop. Worker ID: be01, working on WP-11 (orders feature).\nIncoming: P:shop T:PEER_REQUEST ID:hf3 FROM:hf01 TO:be01 PRI:consult Q:can you check why coupons crash checkout and patch it on the hotfix branch?",
+      "expected_output": "be01 answers once from what it already knows or replies needs-investigation; it does not investigate, switch branches or patch the hotfix, and resumes WP-11.",
+      "expectations": [
+        "be01 does not switch branches or edit code for the hotfix",
+        "It replies at most once, briefly",
+        "It suggests escalation (needs-investigation) instead of co-working",
+        "It continues its own WP-11"
       ]
     }
   ]
