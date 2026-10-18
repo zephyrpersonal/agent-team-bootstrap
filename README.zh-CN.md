@@ -6,7 +6,7 @@
 
 ## 功能特性
 
-- **Leader 严格只负责协调**：分配任务与职责、管理依赖和冲突、处理关键回执、汇报结果；不亲自编码、测试、审查、合并、部署，也不轮询或监听。
+- **Leader 严格只负责协调**：把你的目标澄清成任务书，先侦察再拆分任务包，多任务包的计划先给你确认，派发后让 Worker 朝目标收束，最后用一份报告收尾；不亲自编码、测试、审查、合并、部署，也不轮询或监听，唯一会写的文件是团队账本。
 - **Worker Mesh 点对点协作**：Worker 直接讨论 API、技术问题、联调和 Bug，不经过 Leader 转发。
 - **独立技术审查**：Reviewer 与开发 Worker 直接沟通，只向 Leader 提交最终审查结论。
 - **原生通信**：使用可调用的 Codex / Claude Code Session 消息工具，不自建消息队列、后台服务或监听程序。
@@ -62,6 +62,15 @@ Project: my-project
 ```
 
 Claude Code 则使用 `/agent-team-bootstrap leader`。
+
+### 任务、账本与收束
+
+- **澄清**：Leader 把每个目标复述成 `mission.md`（目标、不做什么、验收标准），一次最多问三个问题。需要了解代码库时，第一个任务包是只读的**侦察**，Leader 根据侦察报告做规划。
+- **规划与确认**：每个任务包有负责人、依赖、预算（`DUE`、`ROUNDS`）和检查点。有两个及以上任务包、或涉及共用接口的计划，先等你确认；单个任务包的目标直接派发。
+- **团队账本**：任务书、计划、任务包说明、成员表和决策记录放在 `team/<project>` 分支（永不合并）。派活时带固定版本的引用，如 `REF:team/my-project@3f9c2e1:wp/17.md`，所以任务说明不受消息长度限制。只有 Leader 写账本，也没人轮询它。
+- **收束**：Worker 在 `ASSIGN_ACK U:` 里复述任务，到里程碑发 `CHECKPOINT`，超预算或超范围时发 `OVER_BUDGET` / `SCOPE_CHANGE_REQUEST`，而不是自己扩展；Leader 回 `CONTINUE`、`REDIRECT` 或 `STOP`。
+- **收尾**：一份最终报告（完成了什么、没完成什么、风险、后续事项、代你做的决定），你确认后给所有 Worker 发 `RELEASE`。
+- **你的画像**：全局 `~/.agents/owner-profile.md`（本地，不提交）加上账本里的项目级 `owner.md`，其中明确列出授权范围。Leader 依据画像做的决定标为 `BY:profile`，删除、部署、权限、合并这几类永远不能代你决定。详见 [leader.md](skills/agent-team-bootstrap/references/leader.md) 和 [ledger.md](skills/agent-team-bootstrap/references/ledger.md)。
 
 ### 启动 Worker
 
@@ -147,6 +156,7 @@ URL 加上 `?demo=1` 可看脚本化演示。需要 Node.js 20+。可选参数�
 
 - [Skill 指令](skills/agent-team-bootstrap/SKILL.md)
 - [启动和排障](skills/agent-team-bootstrap/references/quickstart.md)
+- [Leader 规约](skills/agent-team-bootstrap/references/leader.md) 与 [团队账本](skills/agent-team-bootstrap/references/ledger.md)
 - [通信协议](skills/agent-team-bootstrap/references/protocol.md)
 - [传输能力](skills/agent-team-bootstrap/references/transports.md)
 - [可选项目模板](templates/)

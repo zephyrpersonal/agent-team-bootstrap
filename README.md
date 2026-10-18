@@ -6,7 +6,7 @@
 
 ## Features
 
-- **Coordination-only Leader:** assigns ownership, coordinates dependencies, handles exceptions, and summarizes confirmed outcomes. Does not code, test, review code, merge, deploy, or poll for updates.
+- **Coordination-only Leader:** clarifies the Owner's goal into a mission, scouts and plans work packages, gets multi-package plans approved, dispatches, keeps Workers converging and closes with one final report. Does not code, test, review code, merge, deploy, or poll for updates; the only files it writes are the team ledger.
 - **Worker Mesh:** registered Workers communicate directly for implementation questions, API contracts, integration and bug fixes, without routing routine messages through the Leader.
 - **Peer code review:** Reviewer and producing Worker exchange feedback directly. Only final review verdict and completion receipts reach the Leader.
 - **Native session transport:** uses actual supported Codex or Claude Code peer messaging tools; no custom mailbox, daemon, listener, or timer.
@@ -62,6 +62,15 @@ Publish the verified native session address. Do not perform Worker tasks.
 ```
 
 In Claude Code, use `/agent-team-bootstrap leader`.
+
+### Missions, ledger and convergence
+
+- **Intake:** the Leader restates each goal as `mission.md` (goal, non-goals, acceptance criteria) and asks at most three questions in one batch. If it needs codebase knowledge, the first work package is a read-only **scout** whose report it plans from.
+- **Plan and gate:** work packages with owner, dependencies, budget (`DUE`, `ROUNDS`) and checkpoints. Plans with two or more packages, or touching a shared contract, wait for your approval; single-package goals go straight out.
+- **Team ledger:** mission, plan, briefs, roster and decisions live on branch `team/<project>` (never merged). Assignments carry a pinned ref such as `REF:team/my-project@3f9c2e1:wp/17.md`, so briefs are complete despite the message budget. Only the Leader writes it; nobody polls it.
+- **Convergence:** Workers restate each brief in `ASSIGN_ACK U:`, send `CHECKPOINT` at planned milestones, and send `OVER_BUDGET` or `SCOPE_CHANGE_REQUEST` instead of drifting; the Leader answers `CONTINUE`, `REDIRECT` or `STOP`.
+- **Close:** one final report (delivered, not delivered, risks, follow-ups, delegated decisions), then `RELEASE` for every Worker once you accept.
+- **Owner profile:** a global `~/.agents/owner-profile.md` (local, never committed) plus a project `owner.md` in the ledger with an explicit delegated-authority list. Decisions the Leader takes from it are tagged `BY:profile` and never carry your authority for destructive actions, deploys, access control or merges. See [leader.md](skills/agent-team-bootstrap/references/leader.md) and [ledger.md](skills/agent-team-bootstrap/references/ledger.md).
 
 ### Start a Worker
 
@@ -147,6 +156,7 @@ Sending a message does not guarantee receipt, acceptance, or automatic wake-up. 
 
 - [Skill instructions](skills/agent-team-bootstrap/SKILL.md)
 - [Quick start and troubleshooting](skills/agent-team-bootstrap/references/quickstart.md)
+- [Leader rules](skills/agent-team-bootstrap/references/leader.md) and [team ledger](skills/agent-team-bootstrap/references/ledger.md)
 - [Messaging protocol](skills/agent-team-bootstrap/references/protocol.md)
 - [Transport support](skills/agent-team-bootstrap/references/transports.md)
 - [Optional project templates](templates/)

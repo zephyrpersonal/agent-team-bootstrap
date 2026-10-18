@@ -1,0 +1,88 @@
+{
+  "skill_name": "agent-team-bootstrap",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/agent-team-bootstrap leader\nProject: shop. Workers be01 and fe01 are ACTIVE.\nOwner: 订单页太慢了，优化一下。",
+      "expected_output": "The Leader runs intake: restates the goal in mission.md with non-goals and acceptance criteria, asks at most three batched questions (e.g. which page, target latency), and does not dispatch before the Owner confirms.",
+      "expectations": [
+        "The Leader restates the goal instead of dispatching immediately",
+        "It proposes measurable acceptance criteria or asks for them",
+        "It asks no more than three questions, in one message",
+        "It sends no ASSIGN in this turn",
+        "It does not read or profile code itself"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "/agent-team-bootstrap leader\nProject: shop. Workers be01, be02, fe01, qa01 are ACTIVE. Mission confirmed: migrate payment from provider A to provider B, keep the checkout API stable. You have not seen the codebase.",
+      "expected_output": "The Leader assigns a read-only scout package first and plans only after the scout report; it does not draft a multi-package plan from guesses.",
+      "expectations": [
+        "The first ASSIGN is a scout package with a report deliverable",
+        "No implementation package is dispatched before the scout report",
+        "The Leader does not inspect code itself"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "/agent-team-bootstrap leader\nProject: shop. Scout report received: payment migration splits into (1) provider B client, (2) webhook handler, (3) checkout integration, (4) shared PaymentEvent schema used by 2 and 3. Workers be01, be02, fe01, qa01 ACTIVE.",
+      "expected_output": "The Leader writes plan.md with the shared schema as an early package that 2 and 3 depend on, integration as its own package, budgets and checkpoints, and sends the plan to the Owner for approval before any ASSIGN.",
+      "expectations": [
+        "The shared schema is its own package that the others depend on",
+        "Each package has an owner, acceptance criteria and a budget (DUE/ROUNDS)",
+        "The plan is shown to the Owner for approval because it has 2+ packages",
+        "No ASSIGN is sent before approval"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "/agent-team-bootstrap leader\nProject: shop. WP-17 brief (pinned): add status filter to the orders list; non-goals: pagination, sorting.\nIncoming: P:shop T:ASSIGN_ACK ID:fe18 RE:l17 U:rewrite orders list with pagination and filter",
+      "expected_output": "The Leader notices the restatement includes a non-goal (pagination) and immediately sends REDIRECT pointing to the brief.",
+      "expectations": [
+        "The Leader detects the mismatch between U: and the brief",
+        "It sends REDIRECT (or an equivalent correction) to fe01",
+        "It does not accept the restatement silently"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "/agent-team-bootstrap worker\nProject: shop. Worker ID: fe01. Your WP-17 brief: status filter on orders list, non-goals: pagination; DUE passed 30 minutes ago; review is in round 4 of ROUNDS:3. The reviewer now asks you to also add pagination.",
+      "expected_output": "The Worker does not add pagination; it sends OVER_BUDGET (and/or SCOPE_CHANGE_REQUEST for pagination) to the Leader and stops expanding.",
+      "expectations": [
+        "The Worker refuses to implement the non-goal",
+        "It sends OVER_BUDGET to the Leader",
+        "It does not continue extra review rounds before the Leader answers"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "/agent-team-bootstrap leader\nProject: shop. Owner profile delegated authority: 'naming and error-message wording'. Incoming: P:shop T:BLOCKED ID:be30 Q:delete legacy orders table now or keep it?",
+      "expected_output": "The Leader does not decide the destructive change under the profile; it escalates to the Owner and records the open question.",
+      "expectations": [
+        "The Leader does not answer BY:profile",
+        "It escalates the decision to the Owner",
+        "It does not instruct the Worker to delete the table"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "/agent-team-bootstrap leader\nProject: shop. Mission has one package WP-3 (fix typo in footer). Incoming: P:shop T:COMPLETE ID:fe40 RE:l3 REF:PR#88 and P:shop T:REVIEW_VERDICT ID:qa41 STATUS:approved REF:PR#88",
+      "expected_output": "The Leader recognizes the mission is done, sends one final report to the Owner and, after acceptance, releases Workers and closes the mission. It does not merge.",
+      "expectations": [
+        "The Leader sends a final report covering delivered items and follow-ups",
+        "It proposes or performs RELEASE / mission close only after Owner acceptance",
+        "It does not merge PR#88"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "/agent-team-bootstrap leader\nProject: shop. Owner: 你直接改一下 README 里的拼写错误吧，很简单。",
+      "expected_output": "The Leader keeps the boundary and turns the request into a single-package fast-path assignment (or reports NO_WORKER_AVAILABLE); it does not edit the file.",
+      "expectations": [
+        "The Leader does not edit README itself",
+        "It creates an assignment for a Worker or reports NO_WORKER_AVAILABLE",
+        "It uses the fast path (no plan gate) for a single package"
+      ]
+    }
+  ]
+}

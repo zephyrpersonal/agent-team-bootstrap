@@ -36,7 +36,7 @@ Compact examples (native `prompt` text, NOT a persistent mailbox):
 ```text
 P:wms T:PEER_REQUEST ID:fe12 TO:backend01 Q:order status enums? REF:docs/api/orders.md ACK:1
 P:wms T:PEER_REPLY ID:be12 RE:fe12 A:pending,paid,cancelled
-P:wms T:REVIEW_REQUEST ID:fe19 TO:qa01 REF:PR#42 ACK:1
+P:wms T:REVIEW_REQUEST ID:fe19 TO:qa01 REF:PR#42 WP:team/wms@3f9c2e1:wp/17.md ACK:1
 P:wms T:REVIEW_FEEDBACK ID:qa20 RE:fe19 REF:PR#42#comment-3
 P:wms T:REVIEW_RESULT ID:qa21 RE:fe19 STATUS:approved REF:PR#42
 P:wms T:REVIEW_VERDICT ID:qa22 TO:leader STATUS:approved REF:PR#42
@@ -45,6 +45,11 @@ P:wms T:SKILL_REFRESH ID:sr1 TO:fe01 REF:a1b2c3d re-invoke agent-team-bootstrap 
 P:wms T:SKILL_REFRESH_ACK ID:fe30 RE:sr1
 P:wms T:LEAVE_REQUEST ID:fe31 TO:leader REF:branch fe/orders-ui@a1b2c3
 P:wms T:LEAVE_ACK ID:l40 RE:fe31
+P:wms T:ASSIGN ID:l17 TO:fe01 E:202610181200 REF:team/wms@3f9c2e1:wp/17.md PEERS:be01 ACK:1
+P:wms T:ASSIGN_ACK ID:fe18 RE:l17 U:orders list page with status filter, API from WP-12 unchanged
+P:wms T:CHECKPOINT ID:fe20 RE:l17 M:1 STATE:on-track REF:fe/orders@a1b2
+P:wms T:OVER_BUDGET ID:fe21 RE:l17 WHY:review round 4 of 3, pagination contract unclear REF:PR#42
+P:wms T:REDIRECT ID:l22 TO:fe01 E:202610181200 REF:team/wms@7d0e4b2:wp/17.md
 P:wms T:LEADER_HANDOFF ID:l50 TO:leader2 E:202610181530 N:3
 P:wms T:LEADER_HANDOFF_ACK ID:m1 RE:l50
 P:wms T:LEADER_CHANGE ID:l51 TO:fe01 NEW:m2/leader2 E:202610181530
@@ -71,7 +76,13 @@ P:wms T:PEER_REQUEST ID:fe12 FROM:fe01 TO:be01 Q:order status enums? ACK:1
 | `PING` | Either → known target | `PONG`, matching `in_reply_to` |
 | `JOIN_REQUEST` | Worker → Leader | `JOIN_ACK` accepting, adjusting or rejecting scope |
 | `JOIN_ACK` | Leader → Worker | `ACK_RECEIVED` (only if accepted and verified) |
-| `ASSIGN` | Leader → registered Worker | `ASSIGN_ACK` or `BLOCKED` |
+| `ASSIGN` | Leader → registered Worker, `REF:team/<p>@<sha>:wp/<id>.md` | `ASSIGN_ACK U:<one-line restatement>` or `BLOCKED` with a question |
+| `CHECKPOINT` | Worker → Leader at a planned milestone, or answering `STATUS_REQUEST` | None if on track; `CONTINUE` at a gate; `REDIRECT` / `STOP` if drifting |
+| `OVER_BUDGET` | Worker → Leader past `DUE` / `ROUNDS` or scope estimate | `CONTINUE` with a new budget, `REDIRECT` or `STOP` |
+| `CONTINUE` | Leader → Worker | None |
+| `REDIRECT` | Leader → Worker, new pinned brief ref | `ASSIGN_ACK` with a new `U:` |
+| `STOP` | Leader → Worker | Worker pushes, hands off, `COMPLETE STATUS:stopped` |
+| `STATUS_REQUEST` | Leader → Worker, once per overdue package per due date | `CHECKPOINT` |
 | `PROGRESS` | Worker → Leader | Reply only if action/decision needed |
 | `BLOCKED` | Worker → Leader | Decision or resolution plan; escalate to Owner if required |
 | `CONTRACT_CHANGE` | Worker → Leader | Scope/impact decision or dependent-Worker notification |
@@ -149,11 +160,9 @@ The real target thread ID is supplied to the native tool, not repeated as a long
 
 Every sender must count UTF-8 bytes of the native prompt before sending when possible; otherwise err on shorter messages. This exact Codex TUI error, `prompt exceeded the maximum context budget`, is a **pre-send validation rejection**. Shorten before retrying; don't mistake it for a full model context window or an ambiguous delivery failure. Source: https://github.com/openai/codex/blob/main/codex-rs/tui/src/dynamic_tools.rs
 
-## Coordination-only Leader and idle behavior
+## Leader behaviour
 
-- Leader is a **receipt-driven dispatcher**: assign responsibilities, route blockers, request independent reviews, summarize received results. Never code, inspect diffs, run tests, review implementation, merge or deploy.
-- After sending a message, finish the turn. **Do not run watchers, filesystem listeners, polling loops, `wait_threads`, scheduled checks, or status probes** to await a Worker. Native incoming messages provide the next event when the host supports delivery.
-- Missing Worker / Reviewer means `NO_WORKER_AVAILABLE` / `REVIEW_PENDING`, not that the Leader should take over.
+The Leader's rules, decision rights and event table are in [leader.md](leader.md); the ledger it writes is described in [ledger.md](ledger.md).
 
 ## Handling ambiguous outcomes
 

@@ -37,7 +37,7 @@ Leader 派发前应先定执行方案：串行/并行、每步负责人、预期
 
 ## 4. 角色绑定与双向认知
 
-Leader 记录（采用已配置的项目状态机制；没有机制时仅维持本 Session 内的已确认名册）：
+Leader 记录在团队账本里（默认是协调分支 `team/<project>`，见 Skill 的 `references/ledger.md`；项目也可以配置成 issue tracker）。Leader 只写账本，不写代码：
 
 - `worker_id` 和**可核验的原生 Session/thread 目标**
 - `created_by`、能力/专长、**当前职责**、任务（可选）
