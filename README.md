@@ -103,6 +103,7 @@ One Leader per team at a time, but both roles can be replaced, e.g. when you swi
 - **Failover:** if the old Leader is offline, a new Leader started with `Takeover` sends `LEADER_CHANGE FO:1`. Workers accept it only if you wrote `Failover: allowed` when forming the team and their old Leader is unreachable; otherwise you confirm it in each Worker's session.
 - **Fencing:** every Leader term has an epoch (`E:<UTC yyyymmddhhmm>`). A Leader that comes back after a failover gets `STALE_LEADER` and stands down.
 - **Lost Worker:** when a machine is down the Leader marks its Workers `LOST`, reassigns their tasks from the last pushed refs on new branches, and updates affected peers. On multi-machine teams Workers push their branch at each milestone.
+- **AFK / BACK:** a Leader or Worker going offline briefly announces `AFK`; one that vanishes unannounced is noticed by whoever next fails to reach it (no heartbeats). While the Leader is away, Workers keep working, hold their receipts and notify you once; on `BACK` they report their state and resend the held receipts. A Worker that finds a peer AFK holds that message, does other work, and escalates only if blocked.
 - **Switching your own device** needs nothing if the agents run on always-on hosts: attach to their herdr server from any device.
 
 ## Team dashboard (optional, human-run)

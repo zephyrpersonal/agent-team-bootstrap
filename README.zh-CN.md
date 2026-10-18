@@ -103,6 +103,7 @@ Worker 交接未完成工作后发送 `LEAVE_REQUEST`（附交接引用），Lea
 - **故障接管**：旧 Leader 失联时，以 `Takeover` 启动的新 Leader 发送 `LEADER_CHANGE FO:1`。只有组队时你写了 `Failover: allowed`、且 Worker 联系不上旧 Leader，Worker 才会接受；否则需要你在每个 Worker 的会话里确认。
 - **防止双 Leader**：每届 Leader 有一个 epoch（`E:<UTC yyyymmddhhmm>`）。接管后旧 Leader 恢复上线，会收到 `STALE_LEADER` 并退出。
 - **掉线的 Worker**：机器下线后，Leader 把上面的 Worker 标为 `LOST`，从最后推送的提交开新分支重新分配任务，并通知相关成员。跨机器的团队里 Worker 每到一个里程碑都要推送分支。
+- **AFK / BACK**：Leader 或 Worker 短暂离开时先发 `AFK`；没打招呼就消失的成员，会在别人下次给它发消息失败时被发现（不做心跳）。Leader 离开期间，Worker 继续干活，暂存回执并通知你一次；Leader 发 `BACK` 后，Worker 汇报状态并补发暂存的回执。Worker 发现同伴 AFK 时先暂存消息、做别的事，只有被卡住时才上报。
 - **你自己换设备**不需要任何操作，只要 Agent 跑在常开的主机上，从任何设备连到它们的 herdr server 即可。
 
 ## 团队可视化面板（可选，由人工启动）

@@ -51,6 +51,9 @@ P:wms T:LEADER_CHANGE ID:l51 TO:fe01 NEW:m2/leader2 E:202610181530
 P:wms T:JOIN_REQUEST ID:fe40 TO:leader2 REJOIN:1 E:202610181530 TASK:docs/tasks/17.md STATE:working REF:fe/orders@c3d4 LAST:fe23
 P:wms T:PEER_UPDATE ID:m9 TO:fe01 E:202610181530 OLD:be01 NEW:be02
 P:wms T:STALE_LEADER ID:fe41 RE:l52 E:202610181530 LEADER:m2/leader2
+P:wms T:AFK ID:l60 FROM:leader E:202610181530 UNTIL:0930
+P:wms T:BACK ID:l61 FROM:leader E:202610181530
+P:wms T:BACK_ACK ID:fe50 RE:l61 FROM:fe01 STATE:review REF:fe/orders@e5f6 LAST:fe23
 ```
 
 On a herdr team the same events go through `herdr agent prompt <name> '<text>'` and always carry `FROM`:
@@ -86,6 +89,9 @@ P:wms T:PEER_REQUEST ID:fe12 FROM:fe01 TO:be01 Q:order status enums? ACK:1
 | `LEADER_HANDOFF` | Old Leader → new Leader | `LEADER_HANDOFF_ACK`; old Leader then sends `LEADER_CHANGE` to each ACTIVE Worker and stands down |
 | `LEADER_CHANGE` | Current Leader, or new Leader on failover (`FO:1`) → Worker | Worker checks it, then `JOIN_REQUEST REJOIN:1` to the new Leader; else `LEADER_CHANGE_PENDING` to its own Owner |
 | `PEER_UPDATE` | Leader → Worker | None; Worker replaces or drops that peer contact |
+| `AFK` | Leader → ACTIVE Workers; Worker → Leader and open peers | None; receivers hold messages to the sender (Workers hold management receipts while the Leader is AFK) |
+| `BACK` | Returning member → those it told `AFK` (Leader: all ACTIVE Workers) | From the Leader: `BACK_ACK` with state, then held receipts; from a peer: held requests |
+| `BACK_ACK` | Worker → returned Leader | None |
 | `STALE_LEADER` | Worker → Leader with a lower epoch | None; that Leader stands down and tells its Owner |
 | `ACK_RECEIVED` / `PONG` | Receiver → sender | No automatic recursive ACK |
 
@@ -154,5 +160,6 @@ Every sender must count UTF-8 bytes of the native prompt before sending when pos
 - Distinguish `tool_failed`, `transport_sent`, `receiver_acknowledged`, `review_accepted`, `merged`.
 - If native send returns success but no reply, status is `SENT_UNACKNOWLEDGED`.
 - Never mark a Worker active simply because a `JOIN_REQUEST` was sent.
+- A resend keeps its original `ID`; a receiver handles each `ID` once and ignores repeats, so a retry after an ambiguous failure cannot double-apply an event.
 - If a Codex send returns an error that may still have delivered, **inspect the exact target** before resending the same `message_id`.
 - Durable task state can be saved in repository docs/issues/explicit stores, but **never treat such storage as a message relay** under this Skill.

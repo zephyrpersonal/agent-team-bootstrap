@@ -96,6 +96,8 @@ Project: <project>  Takeover: yes  Workers: m1/be01, m2/fe01, m2/qa01
 Send LEADER_CHANGE FO:1 to each Worker and rebuild the roster only from their REJOIN JOIN_REQUESTs.
 ```
 
+Going offline for a while, tell the Leader: `Send AFK UNTIL:0930 to all Workers.` On return: `Send BACK to all Workers.` If the Leader vanished without `AFK`, Workers notice on their next send, hold receipts and notify you; resuming it and sending `BACK` replays them.
+
 Machine down, tell the Leader: `Machine m3 is offline: mark its Workers LOST and reassign their tasks from the last pushed refs.`
 
 ## Minimum end-to-end acceptance test
