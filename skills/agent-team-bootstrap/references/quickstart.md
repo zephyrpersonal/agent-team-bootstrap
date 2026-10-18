@@ -96,7 +96,7 @@ Project: <project>  Takeover: yes  Workers: m1/be01, m2/fe01, m2/qa01
 Send LEADER_CHANGE FO:1 to each Worker and rebuild the roster only from their REJOIN JOIN_REQUESTs.
 ```
 
-Hotfix while a feature mission runs, tell the Leader: `P0 hotfix: checkout returns 500 for coupons since v2.3.1. Base: tag v2.3.1.` It opens a separate P0 mission, staffs an idle or new hotfix Worker (if your owner.md delegates that) before pausing any feature Worker, and limits consultation of feature Workers to the brief's `Consult` budget.
+New request while other work runs: just describe it, e.g. `Checkout returns 500 for coupons since v2.3.1, customers are blocked.` The Leader classifies priority, independence and size, then schedules: idle Worker → new Worker (if `owner.md` delegates it, within `Max Workers`) → pause a strictly lower-priority package → queue. Consult budgets follow who is busy.
 
 Going offline for a while, tell the Leader: `Send AFK UNTIL:0930 to all Workers.` On return: `Send BACK to all Workers.` If the Leader vanished without `AFK`, Workers notice on their next send, hold receipts and notify you; resuming it and sending `BACK` replays them.
 

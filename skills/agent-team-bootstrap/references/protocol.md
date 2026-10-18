@@ -50,8 +50,8 @@ P:wms T:ASSIGN_ACK ID:fe18 RE:l17 U:orders list page with status filter, API fro
 P:wms T:CHECKPOINT ID:fe20 RE:l17 M:1 STATE:on-track REF:fe/orders@a1b2
 P:wms T:OVER_BUDGET ID:fe21 RE:l17 WHY:review round 4 of 3, pagination contract unclear REF:PR#42
 P:wms T:REDIRECT ID:l22 TO:fe01 E:202610181200 REF:team/wms@7d0e4b2:wp/17.md
-P:wms T:PEER_REQUEST ID:hf3 FROM:hf01 TO:be01 PRI:consult Q:1) why retry=3 in pay client? 2) idempotency key source?
-P:wms T:PAUSE ID:l30 TO:be02 E:202610181200 WHY:P0 hotfix
+P:wms T:PEER_REQUEST ID:fx3 FROM:fx01 TO:be01 MODE:consult PRI:P0 Q:1) why retry=3 in pay client? 2) idempotency key source?
+P:wms T:PAUSE ID:l30 TO:be02 E:202610181200 WHY:P0 WP-30
 P:wms T:RESUME ID:l35 TO:be02 E:202610181200 REF:team/wms@7d0e4b2:wp/21.md
 P:wms T:LEADER_HANDOFF ID:l50 TO:leader2 E:202610181530 N:3
 P:wms T:LEADER_HANDOFF_ACK ID:m1 RE:l50
@@ -88,7 +88,7 @@ P:wms T:PEER_REQUEST ID:fe12 FROM:fe01 TO:be01 Q:order status enums? ACK:1
 | `STATUS_REQUEST` | Leader → Worker, once per overdue package per due date | `CHECKPOINT` |
 | `PAUSE` | Leader → feature Worker, to free it for a P0 package | Push, `CHECKPOINT`, `PAUSE_ACK` |
 | `RESUME` | Leader → paused Worker, pinned original brief | `ASSIGN_ACK` with `U:` |
-| `PEER_REQUEST PRI:consult` | Worker outside your package → you | One short `PEER_REPLY` from memory, or `A:needs-investigation` |
+| `PEER_REQUEST MODE:consult` | Worker outside your package → you | Busy: one short `PEER_REPLY` from memory or `A:needs-investigation`; idle: may investigate read-only first |
 | `PROGRESS` | Worker → Leader | Reply only if action/decision needed |
 | `BLOCKED` | Worker → Leader | Decision or resolution plan; escalate to Owner if required |
 | `CONTRACT_CHANGE` | Worker → Leader | Scope/impact decision or dependent-Worker notification |

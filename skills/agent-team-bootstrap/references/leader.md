@@ -24,8 +24,8 @@ The Leader turns the Owner's intent into a confirmed mission, plans it, dispatch
 | Changing mission goal, non-goals or acceptance criteria | | | ✓ |
 | Plan approval for multi-package missions | | | ✓ |
 | Destructive actions, deploys, access control, merges, scope beyond the mission | | never delegable | ✓ |
-| Provisioning a hotfix Worker for a P0 mission | | if `owner.md` delegates it | otherwise |
-| `PAUSE` of a feature Worker for a P0 mission | ✓ (only when no idle or new Worker is possible) | | |
+| Provisioning a new Worker when nobody fitting is free | | if `owner.md` delegates it for that priority, within `Max Workers` | otherwise |
+| `PAUSE` of a lower-priority package for a strictly higher one | ✓ (rules in 4a) | | |
 | Provisioning other Workers, failover pre-authorization, closing the team | | | ✓ |
 
 A Leader decision made from the Owner profile or a recorded decision carries `BY:profile` (or `BY:decision:<id>`) and cites it in the ledger; Workers treat it as Leader authority, never Owner authority. Only what the Owner said directly is `BY:owner`.
@@ -34,7 +34,7 @@ A Leader decision made from the Owner profile or a recorded decision carries `BY
 
 Classify every Owner message before acting:
 
-- **New goal** → intake (section 4) as a new mission; decide its priority. An urgent production fix is a `P0` hotfix mission (section 4a) and runs alongside current missions.
+- **New request** → classify it (priority, independence, size; section 4a), then intake (section 4) as a new mission or as a change to a running one, and schedule it.
 - **Change to a running mission** → name which mission it belongs to and restate the change against `missions/<id>.md` in one or two lines; if it alters goal, non-goals or acceptance criteria, get the Owner's confirmation, then update the ledger and `REDIRECT` / `STOP` affected work packages.
 - **Question / status request** → answer from the ledger and receipts, separating confirmed receipts from unknowns (herdr: may add one `agent list`, labelled *herdr-observed*).
 - **Answer to an open question** → record it in `decisions.md` (`BY:owner`), unblock waiting work.
@@ -58,15 +58,24 @@ INTAKE → (SCOUT) → PLAN → (Owner gate) → DISPATCH → EXECUTE → ACCEPT
 8. **Report.** Send the Owner one final report: what was delivered (refs), what was not, risks, follow-ups, decisions taken `BY:profile`. Mark the mission `REPORTED`.
 9. **Close.** After the Owner accepts: `RELEASE` the Workers no other mission uses (unless the Owner keeps them), mark the mission `CLOSED`, push the ledger, end. Follow-ups become a new mission.
 
-## 4a. Concurrent missions and hotfixes
+## 4a. Scheduling: priority, independence and load
 
-Several missions may run at once under one Leader; every work package belongs to one mission and has a priority. Never start a second Leader for a hotfix.
+All missions and packages share one queue under one Leader; never start a second Leader for urgent work. Re-run this schedule whenever a request arrives, a package becomes ready, or a Worker frees up (`COMPLETE`, `STOP`, `LEAVE_ACK`, `LOST`).
 
-1. **Hotfix intake (fast path, no gate):** restate symptom, severity, affected version/branch, acceptance (reproduction fixed plus a regression test); ask only if the base branch is unclear. One work package from the hotfix template in ledger.md.
-2. **Staffing, in this order:** an idle Worker; else a new hotfix Worker (provisioned in its own worktree on the base branch, if `owner.md` delegates it; otherwise ask the Owner); only else `PAUSE` the feature Worker that is nearest a checkpoint or off the critical path. Never let the hotfix ride on a feature branch or PR.
-3. **Protect feature work from the hotfix:** the brief lists `Consult:` peers with a question budget (default: two questions, one feature Worker). The hotfix Worker answers itself from code, history, briefs and scout reports first, batches its questions, and asks for more consultation or a real co-worker only through `OVER_BUDGET`; then you decide between more questions and an explicit `PAUSE` of that feature Worker.
-4. **Review:** the hotfix review jumps the queue; prefer the dedicated Reviewer, a feature Worker only if you assign it.
-5. **After merge** (Owner-approved): from the hotfix `COMPLETE` (it lists touched areas) and the feature briefs — not from code — find overlapping feature packages and `REDIRECT` their owners to rebase on the new base. A backport is its own package. `RESUME` any paused Worker with its pinned brief.
+1. **Classify each new request** from what the Owner describes and the ledger, not from a keyword:
+   - **Priority:** `P0` (production broken, data at risk, blocks other work, or the Owner says it cannot wait), `P1` (normal), `P2` (when capacity allows).
+   - **Independence:** does it touch areas, contracts or branches of running packages (judged from briefs and scout reports)? Independent → its own mission, runs in parallel. Overlapping → a change to that mission, or sequenced after the overlapping package. Unknown and it matters → a short scout.
+   - **Size:** one package (fast path, no gate) or several (gate).
+   - **Base:** a fix for what is deployed starts from the deployed base (default branch or release tag), never from another package's branch.
+   - If the classification would pause someone, tell the Owner in one line first ("P0, independent, pausing be02 — say if not"); otherwise just record it.
+2. **Staff ready packages by priority, then age:**
+   1. an idle Worker with fitting responsibilities;
+   2. a new Worker, if `owner.md` delegates provisioning for that priority and the team is below `Max Workers`; otherwise ask the Owner;
+   3. preemption, only for a package of strictly higher priority than the lowest-priority running package: `PAUSE` the Worker nearest a checkpoint or off the critical path. Never preempt for equal priority, and never pause the same package twice before its next checkpoint;
+   4. otherwise mark it `QUEUED` and, for P0/P1, tell the Owner what it waits for.
+3. **Interruption budget follows load.** When writing a brief, set `Consult` per person from their current state: idle → list them under `Peers` instead; busy on lower priority than this package → up to three questions; busy on equal or higher priority → one question or none. On `OVER_BUDGET`, recompute with the current load: grant more, make a now-idle person a co-worker, or pause per 2.3.
+4. **Reviews** are taken in priority order; prefer a dedicated Reviewer, a busy Worker only if you assign it.
+5. **When a package lands** (merge still Owner-approved): from its `COMPLETE` (touched areas) and the other briefs — not code — `REDIRECT` owners of overlapping packages to rebase; a backport is its own package. Paused and queued packages restart through step 2 as capacity frees; `RESUME` with the pinned brief.
 
 ## 5. Event → action
 
@@ -79,8 +88,8 @@ Several missions may run at once under one Leader; every work package belongs to
 | `OVER_BUDGET` | Decide per section 2: `CONTINUE` with a new budget, `REDIRECT` to a smaller deliverable, or `STOP`; escalate to the Owner if beyond your rights. |
 | `BLOCKED` / `SCOPE_CHANGE_REQUEST` / `COORDINATION_UPDATE` | Resolve within your rights, else ask the Owner once and record the answer. |
 | `REVIEWER_NEEDED` | Designate a Reviewer, send mutual peer contacts; none available → mark `REVIEW_PENDING`. Never relay review content or review yourself. |
-| `COMPLETE` / `REVIEW_VERDICT` | Record (never verify the implementation yourself; merges and deploys still need Owner approval); check package acceptance; unlock dependents (`ASSIGN` next packages); if the mission is done, go to Report. |
-| `PAUSE_ACK` | Mark the package `PAUSED`; then `ASSIGN` the hotfix. Its later `COMPLETE` → `RESUME REF:<original brief>`. |
+| `COMPLETE` / `REVIEW_VERDICT` | Record (never verify the implementation yourself; merges and deploys still need Owner approval); check package acceptance; unlock dependents and re-run the schedule (4a); if the mission is done, go to Report. |
+| `PAUSE_ACK` | Mark the package `PAUSED`; `ASSIGN` the higher-priority package that needed the Worker. Paused work resumes through 4a. |
 | `PEER_UNREACHABLE` / `AFK` / `BACK` / `LEAVE_REQUEST` | As in SKILL.md *Leader change and lost members* / leaving rules. |
 | Owner message | Section 3. |
 

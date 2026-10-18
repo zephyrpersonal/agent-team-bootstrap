@@ -69,7 +69,7 @@ Claude Code 则使用 `/agent-team-bootstrap leader`。
 - **规划与确认**：每个任务包有负责人、依赖、预算（`DUE`、`ROUNDS`）和检查点。有两个及以上任务包、或涉及共用接口的计划，先等你确认；单个任务包的目标直接派发。
 - **团队账本**：任务书、计划、任务包说明、成员表和决策记录放在 `team/<project>` 分支（永不合并）。派活时带固定版本的引用，如 `REF:team/my-project@3f9c2e1:wp/17.md`，所以任务说明不受消息长度限制。只有 Leader 写账本，也没人轮询它。Leader 不需要项目代码，只需要用 `Repo:` 克隆出一个只含账本的目录，或使用单独的 `Ledger:` 仓库；两者都没有时报告 `LEDGER_UNAVAILABLE`，不用账本运行。
 - **收束**：Worker 在 `ASSIGN_ACK U:` 里复述任务，到里程碑发 `CHECKPOINT`，超预算或超范围时发 `OVER_BUDGET` / `SCOPE_CHANGE_REQUEST`，而不是自己扩展；Leader 回 `CONTINUE`、`REDIRECT` 或 `STOP`。
-- **Hotfix**：紧急修复作为同一 Leader 下单独的 `P0` 任务，基于线上版本开分支。Leader 优先用空闲的 Worker，或在 `owner.md` 授权时新开一个 hotfix Worker，实在没有才用 `PAUSE` / `RESUME` 暂停某个 feat Worker。hotfix Worker 只能在任务包说明的 `Consult` 次数内向 feat Worker 提问（`PRI:consult`：对方只凭已知信息回一条短消息，不去查）。合并后，Leader 让改动范围有重叠的 feat 任务包先 rebase。
+- **调度**：每个需求都按优先级（`P0`–`P2`）、是否独立于正在进行的工作、规模来分类，没有单独的"hotfix"模式。就绪的任务包按优先级找人：空闲的 Worker → 新开 Worker（`owner.md` 授权、且不超过 `Max Workers`）→ 暂停一个优先级严格更低的任务包 → 排队。能向忙碌的 Worker 提问多少（`MODE:consult`）取决于对方当前的负载和优先级；任务合并后，改动有重叠的任务包先 rebase。
 - **收尾**：一份最终报告（完成了什么、没完成什么、风险、后续事项、代你做的决定），你确认后给所有 Worker 发 `RELEASE`。
 - **你的画像**：全局 `~/.agents/owner-profile.md`（本地，不提交）加上账本里的项目级 `owner.md`，其中明确列出授权范围。Leader 依据画像做的决定标为 `BY:profile`，删除、部署、权限、合并这几类永远不能代你决定。详见 [leader.md](skills/agent-team-bootstrap/references/leader.md) 和 [ledger.md](skills/agent-team-bootstrap/references/ledger.md)。
 

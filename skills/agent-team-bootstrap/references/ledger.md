@@ -45,8 +45,8 @@ Every `ASSIGN` / `REDIRECT` that points into the ledger uses `REF:team/<project>
 
 | File | Content |
 |---|---|
-| `missions/<id>.md` | One per mission: goal, non-goals, constraints, acceptance criteria, assumptions, open questions, priority (`P0` hotfix / `P1` / `P2`), status (`INTAKE` / `PLANNED` / `APPROVED` / `RUNNING` / `REPORTED` / `CLOSED`) |
-| `plan.md` | Work package table across missions: id, mission, priority, title, owner, depends on, parallel group, reviewer, `DUE`, status (incl. `PAUSED`), receipt IDs |
+| `missions/<id>.md` | One per mission: goal, non-goals, constraints, acceptance criteria, assumptions, open questions, priority (`P0` urgent / `P1` normal / `P2` when capacity allows), status (`INTAKE` / `PLANNED` / `APPROVED` / `RUNNING` / `REPORTED` / `CLOSED`) |
+| `plan.md` | Work package table across missions: id, mission, priority, title, owner, depends on, parallel group, reviewer, `DUE`, status (`QUEUED` / `ASSIGNED` / `PAUSED` / `DONE` / `STOPPED`), receipt IDs |
 | `wp/<id>.md` | One work package brief (template below) |
 | `roster.md` | Members: id, address (`<machine>/<name>` on herdr), agent kind, session, `created_by`, role, workspace, state (`ACTIVE` / `AFK` / `LOST` / `LEFT`), current package, authorized peer contacts, last received receipt ID; Leader epoch `E`, `FO`, transport |
 | `decisions.md` | Owner answers (`BY:owner`) and delegated decisions (`BY:profile` / `BY:decision:<id>`), dated, with reason |
@@ -88,7 +88,7 @@ DUE: <UTC time>   ROUNDS: <max review rounds>
 Specific triggers beyond the defaults (over budget, non-goal touched, contract change).
 ```
 
-A **hotfix** package (priority `P0`) branches from the deployed base (default branch or release tag), never from a feature branch. Non-goals always include refactoring and anything from running feature missions; `ROUNDS` is 1–2; `Consult` names at most one feature Worker with a two-question budget; acceptance is "reproduction fixed, regression test added, touched areas listed in `COMPLETE`".
+A **fix for what is deployed** (often `P0`) branches from the deployed base (default branch or release tag), never from another package's branch. Its non-goals include refactoring and anything from other running missions; `ROUNDS` is 1–2; acceptance is "reproduction fixed, regression test added, touched areas listed in `COMPLETE`". `Consult` is set from the current load (leader.md 4a).
 
 A **scout** package has a read-only goal and a report deliverable (affected areas, risks, suggested split, contracts to fix first); its acceptance criterion is "the Leader can plan from it".
 
@@ -120,7 +120,8 @@ Recurring decisions: (e.g. naming, error handling, UI conventions)
 
 ## Delegated authority (Owner-edited only)
 The Leader may decide on my behalf:
-- e.g. provision a hotfix Worker in its own worktree for a P0 mission
+- e.g. provision a new Worker in its own worktree when a P0/P1 package has nobody free
+Max Workers: <n> (cap on concurrent Workers the Leader may run)
 - ...
 Never delegated: destructive actions, deploys, access control, merges, scope beyond the mission.
 ```
