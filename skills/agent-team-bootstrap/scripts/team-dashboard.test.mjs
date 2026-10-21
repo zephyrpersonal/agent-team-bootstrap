@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import { execFileSync } from 'node:child_process';
 import { Script, runInNewContext } from 'node:vm';
+import { fileURLToPath } from 'node:url';
 import { createTracker, createServer, parseEnvelope, parseCodexLine, parseClaudeLine } from './team-dashboard.mjs';
 
 const sample = (client) => JSON.parse(fs.readFileSync(new URL(`./fixtures/team-dashboard/${client}.json`, import.meta.url))).rows;
@@ -206,50 +208,427 @@ test('stale sessions are marked STALE', () => {
   assert.equal(f.tracker().state().sessions[0].exec, 'STALE');
 });
 
-test('server enforces Host guard and serves valid, responsive inline UI', async () => {
+test('tracker links ledgerDir fixture tasks only to exact client and full session IDs', () => {
+  const f = fixture();
+  const ledgerDir = fileURLToPath(new URL('./fixtures/team-dashboard/ledger/', import.meta.url));
+  f.claude('worker', jl(claudeSend('claude-worker', 0, 'u1', 'P:wms T:JOIN_REQUEST ID:join FROM:backend-01')));
+  f.codex('worker', jl(dated(codex.session_meta, 0), dated(codex.send, 20)));
+  const tracker = createTracker({ project: 'wms', claudeDir: f.claudeDir, codexDir: f.codexDir, ledgerDir, now: () => T });
+  const state = tracker.state();
+  assert.equal(state.ledger.status, 'ok');
+  assert.equal(state.ledger.source, 'directory');
+  assert.equal(state.ledger.sourcePath, path.resolve(ledgerDir));
+  assert.equal(state.ledger.commit, null);
+  assert.equal(state.ledger.updatedAt, T);
+  assert.equal(state.sessions.length, 2);
+  assert.deepEqual(state.ledger.tasks.map((task) => [task.id, task.ownerSessionId, task.reviewerSessionId]), [
+    ['17', 'claude:claude-worker', 'codex:codex-worker'],
+    ['18', 'codex:codex-worker', 'claude:claude-worker'],
+    ['19', null, null],
+  ]);
+  fs.rmSync(path.join(f.claudeDir, 'proj', 'worker.jsonl'));
+  f.claude('near-match', jl(claudeSend('claude-worker-extra', 0, 'u1', 'P:wms T:JOIN_REQUEST ID:join FROM:backend-01')));
+  const changed = tracker.state();
+  assert.equal(changed.sessions.find((s) => s.client === 'claude').name, 'backend-01');
+  assert.equal(changed.ledger.tasks[0].ownerSessionId, null, 'a matching name and session prefix cannot link a task');
+  assert.equal(changed.ledger.tasks[0].ownerLink, 'unmatched');
+  assert.equal(changed.ledger.tasks[0].reviewerSessionId, 'codex:codex-worker');
+});
+
+test('HTTP API reports an unavailable ledger branch without affecting sessions', async (t) => {
+  const f = fixture();
+  const ledgerRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-ledger-'));
+  t.after(() => fs.rmSync(ledgerRepo, { recursive: true, force: true }));
+  execFileSync('git', ['init', '--quiet', ledgerRepo]);
+  f.claude('worker', jl(claudeSend('full-worker-session', 0, 'u1', 'P:wms T:JOIN_REQUEST ID:join FROM:backend-01')));
+  const tracker = createTracker({ project: 'wms', claudeDir: f.claudeDir, codexDir: f.codexDir, ledgerRepo, now: () => T });
+  const expected = tracker.state();
+  const server = createServer(tracker);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/state`);
+    assert.equal(response.status, 200);
+    const state = await response.json();
+    assert.equal(state.ledger.status, 'unavailable');
+    assert.equal(state.ledger.source, 'git');
+    assert.equal(state.ledger.sourcePath, ledgerRepo);
+    assert.equal(state.ledger.ref, null);
+    assert.equal(state.ledger.commit, null);
+    assert.equal(state.ledger.updatedAt, T);
+    assert.deepEqual(state.ledger.tasks, []);
+    assert.deepEqual(state.ledger.diagnostics, []);
+    assert.match(state.ledger.error, /branch is unavailable locally; no fetch was attempted/);
+    assert.equal(state.sessions.length, 1);
+    assert.equal(state.sessions[0].id, 'claude:full-worker-session');
+    assert.deepEqual(state.sessions, expected.sessions);
+    assert.deepEqual(state.messages, JSON.parse(JSON.stringify(expected.messages)));
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test('server enforces Host guard and serves the dashboard with tested inline rules', async (t) => {
   const f = fixture();
   const server = createServer(f.tracker());
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const { port } = server.address();
   const get = (host, p) => new Promise((resolve, reject) => {
     http.get({ port, host: '127.0.0.1', path: p, headers: { host } }, (res) => {
-      let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode, body: b }));
+      let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b }));
     }).on('error', reject);
   });
   try {
-    assert.equal((await get('evil.example', '/api/state')).status, 403);
+    for (const route of ['/', '/api/state', '/vendor/d3-7.9.0.min.js', '/unknown']) {
+      assert.equal((await get('evil.example', route)).status, 403, route);
+    }
+    for (const route of ['/unknown', '/vendor/missing.js', '/vendor/D3-LICENSE', '/vendor/team-dashboard.mjs']) {
+      assert.equal((await get(`localhost:${port}`, route)).status, 404, route);
+    }
+    const vendor = await get(`localhost:${port}`, '/vendor/d3-7.9.0.min.js');
+    assert.equal(vendor.status, 200);
+    assert.equal(vendor.headers['content-type'], 'text/javascript; charset=utf-8');
+    assert.equal(vendor.headers['x-content-type-options'], 'nosniff');
+    assert.equal(vendor.body, fs.readFileSync(new URL('./vendor/d3-7.9.0.min.js', import.meta.url), 'utf8'));
+    const license = fs.readFileSync(new URL('./vendor/D3-LICENSE', import.meta.url), 'utf8');
+    assert.match(license, /Copyright/);
+    assert.match(license, /Permission to use, copy, modify, and\/or distribute/);
     const ok = await get(`localhost:${port}`, '/api/state');
     assert.equal(ok.status, 200);
     assert.deepEqual(JSON.parse(ok.body).sessions, []);
-    const html = (await get(`127.0.0.1:${port}`, '/')).body;
-    assert.match(html, /Agent Team Office/);
-    const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+    assert.equal(ok.headers['cache-control'], 'no-store');
+    const page = await get(`127.0.0.1:${port}`, '/');
+    assert.equal(page.status, 200);
+    assert.equal(page.headers['cache-control'], 'no-store');
+    assert.equal(page.headers['x-content-type-options'], 'nosniff');
+    assert.equal(page.headers['content-security-policy'], "default-src 'none'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'");
+    assert.deepEqual(Array.from(page.body.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/g), (match) => match[1]), ['/vendor/d3-7.9.0.min.js']);
+    assert.match(page.body, /<title>Agent Team · 团队监控<\/title>/);
+    const script = page.body.match(/<script>([\s\S]*?)<\/script>/)[1];
     new Script(script);
     assert.doesNotMatch(script, /`|\$\{|format unverified/);
-    const fly = script.slice(script.indexOf('function fly('), script.indexOf('function renderMessages('));
-    runInNewContext(fly + '; fly({from:"a",to:"b"}, 0)', {
-      pos: { a: { x: 0, y: 0 }, b: { x: 100, y: 100 } }, chars: {},
-      motion: { matches: true }, setTimeout: (fn) => fn(),
-      el: () => assert.fail('reduced motion must not create flying envelopes'),
+    const start = script.indexOf('function esc('), end = script.indexOf('// DOM 与轮询状态。');
+    assert.ok(start >= 0 && end > start, 'pure rules have an explicit boundary before DOM state');
+    const context = { setTimeout, clearTimeout, setInterval, clearInterval, performance };
+    const rules = runInNewContext(vendor.body + '\n' + script.slice(start, end) + '; ({ d3, matchingMessages, counts, attentionSessions, avatar, esc, messageKey, newMessages, communicationGraph, forceLayout, curvePath, edgeType, edgeState, cardState })', context);
+    assert.equal(rules.d3.version, '7.9.0');
+    await t.test('card appearance keeps blocked and stale visible without implying running work is complete', () => {
+      for (const [exec, proto, expected] of [
+        ['RUNNING', 'ASSIGNED', 'running'], ['IDLE', 'IN_REVIEW', 'review'],
+        ['RUNNING', 'BLOCKED', 'blocked'], ['STALE', 'COMPLETE', 'stale'],
+        ['RUNNING', 'COMPLETE', 'running'], ['IDLE', 'COMPLETE', 'complete'],
+        ['IDLE', 'NONE', 'idle'], ['STALE', 'BLOCKED', 'blocked'],
+      ]) assert.equal(rules.cardState({ exec, proto }), expected);
+      assert.match(script, /seat\.dataset\.role=s\.role/);
+      assert.match(script, /seat\.dataset\.cardState=cardState\(s\)/);
     });
-    const layout = script.slice(script.indexOf('function layout('), script.indexOf('function renderStage('));
-    for (const width of [288, 335, 640, 900]) {
-      for (const count of [0, 1, 4, 6, 8, 12]) {
-        let bounds;
-        const stage = { clientWidth: width, setAttribute: (name, value) => { if (name === 'viewBox') bounds = value.split(' ').map(Number); } };
-        const sessions = Array.from({ length: count }, (_, i) => ({ id: String(i), role: i ? 'Worker' : 'Leader' }));
-        const positions = Object.values(runInNewContext(layout + '; layout(sessions)', { $: () => stage, stage, sessions }));
-        assert.equal(positions.length, count);
-        for (const p of positions) {
-          assert.ok(p.x >= 60 && p.x <= bounds[2] - 60, 'character fits stage width');
-          assert.ok(p.y >= 100 && p.y <= bounds[3] - 100, 'character fits stage height');
-        }
-        for (let i = 0; i < positions.length; i++) {
-          for (const p of positions.slice(i + 1)) {
-            assert.ok(Math.hypot(p.x - positions[i].x, p.y - positions[i].y) >= 120, 'characters do not overlap');
-          }
-        }
+
+    await t.test('message filters combine exact type and member IDs with case-insensitive search', () => {
+      const messages = [
+        { id: 'm1', type: 'ASSIGN', from: 'claude:1', to: 'codex:2', fromLabel: 'Backend', ref: 'PR#42' },
+        { id: 'm2', type: 'ASSIGN', from: 'codex:2', to: 'claude:1', ref: 'PR#43' },
+        { id: 'm3', type: 'PING', from: 'claude:1', to: 'codex:2', ref: 'PR#42' },
+        { id: 'm4', type: 'ASSIGN', from: 'claude:10', to: 'codex:2', fromLabel: 'claude:1', ref: 'PR#42' },
+      ];
+      const ids = (type = '', member = '', query = '') => Array.from(rules.matchingMessages(messages, type, member, query), (m) => m.id);
+      assert.deepEqual(ids(), ['m1', 'm2', 'm3', 'm4']);
+      assert.deepEqual(ids('ASSIGN', 'claude:1', '  pr#42  '), ['m1']);
+      assert.deepEqual(ids('ASSIGN', 'claude:1'), ['m1', 'm2']);
+      assert.deepEqual(ids('', 'claude:'), []);
+      assert.deepEqual(ids('assign'), []);
+      assert.deepEqual(ids('', '', 'missing'), []);
+      for (const field of ['type', 'fromLabel', 'toLabel', 'from', 'to', 'id', 're', 'status', 'ref']) {
+        const message = { [field]: 'Needle' };
+        assert.deepEqual(Array.from(rules.matchingMessages([message, {}], '', '', '  nEeDlE  ')), [message], field);
       }
-    }
-  } finally { server.close(); }
+    });
+
+    await t.test('counts keep execution and protocol independent; attention lists each member once', () => {
+      const sessions = [
+        { id: 'a', exec: 'RUNNING', proto: 'COMPLETE' },
+        { id: 'b', exec: 'RUNNING', proto: 'BLOCKED' },
+        { id: 'c', exec: 'STALE', proto: 'BLOCKED' },
+        { id: 'd', exec: 'IDLE', proto: 'ACTIVE' },
+        { id: 'e', exec: 'STALE', proto: 'COMPLETE' },
+      ];
+      assert.deepEqual({ ...rules.counts(sessions) }, { total: 5, running: 2, blocked: 2, stale: 2 });
+      assert.deepEqual(Array.from(rules.attentionSessions(sessions), (s) => s.id), ['b', 'c', 'e']);
+      assert.deepEqual({ ...rules.counts([]) }, { total: 0, running: 0, blocked: 0, stale: 0 });
+      assert.deepEqual(Array.from(rules.attentionSessions([])), []);
+    });
+
+    await t.test('avatars map clients to project text marks and unknown clients to a safe fallback', () => {
+      for (const [client, mark, label] of [['claude', 'CC', 'Claude Code'], ['codex', 'CX', 'Codex CLI']]) {
+        const html = rules.avatar(client);
+        assert.match(html, new RegExp('^<span class="avatar cli-icon ' + client + '" role="img" aria-label="' + label + '">'));
+        assert.ok(html.includes('<b>' + mark + '</b>'));
+        assert.doesNotMatch(html, /<svg|<img/);
+        assert.equal(rules.avatar(client), html);
+      }
+      const fallback = rules.avatar('unknown');
+      assert.match(fallback, /^<span class="avatar cli-icon generic" role="img" aria-label="CLI">/);
+      assert.ok(fallback.includes('<b>>_</b>'));
+      for (const client of ['', null, undefined, 'claude:1', 'codex:2', '"><script>alert(1)</script>']) {
+        assert.equal(rules.avatar(client), fallback);
+      }
+      for (const name of ['renderStage', 'renderMembers', 'renderDetail']) {
+        const start = script.indexOf('function ' + name + '(');
+        const end = script.indexOf('\nfunction ', start + 1);
+        assert.ok(start >= 0, name);
+        assert.match(script.slice(start, end), /avatar\(s\.client\)/, name);
+      }
+    });
+
+    await t.test('esc encodes markup and attribute injection characters', () => {
+      assert.equal(rules.esc('"><script>alert("x")</script>&'), '&quot;&gt;&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;&amp;');
+      assert.equal(rules.esc(null), '');
+      assert.equal(rules.esc(undefined), '');
+      assert.equal(rules.esc(0), '0');
+    });
+
+    await t.test('new messages skip the initial snapshot and previously seen sender/ID pairs', () => {
+      const seen = { from: 'claude:1', id: 'm1', ts: 1, type: 'PING', to: 'codex:2' };
+      const duplicate = { ...seen, ts: 2, type: 'PONG', to: 'codex:3' };
+      const otherSender = { ...seen, from: 'claude:2' };
+      const next = { ...seen, id: 'm2' };
+      assert.deepEqual(Array.from(rules.newMessages([seen, otherSender], null)), []);
+      assert.equal(rules.messageKey(seen), rules.messageKey(duplicate));
+      assert.notEqual(rules.messageKey(seen), rules.messageKey(otherSender));
+      const previous = new Set([rules.messageKey(seen)]);
+      assert.deepEqual(Array.from(rules.newMessages([duplicate], previous)), []);
+      assert.deepEqual(Array.from(rules.newMessages([duplicate, otherSender, next], previous)), [otherSender, next]);
+    });
+
+    await t.test('messages without IDs fall back to sender, timestamp, type and recipient', () => {
+      const seen = { from: 'claude:1', ts: 1, type: 'PING', to: 'codex:2' };
+      const variants = [
+        { ...seen, from: 'claude:2' },
+        { ...seen, ts: 2 },
+        { ...seen, type: 'PONG' },
+        { ...seen, to: 'codex:3' },
+      ];
+      assert.equal(rules.messageKey(seen), rules.messageKey({ ...seen, id: '' }));
+      for (const message of variants) assert.notEqual(rules.messageKey(seen), rules.messageKey(message));
+      const previous = new Set([rules.messageKey(seen)]);
+      assert.deepEqual(Array.from(rules.newMessages([{ ...seen }, ...variants], previous)), variants);
+    });
+
+    await t.test('new message batches contain at most the latest four unseen messages', () => {
+      const messages = Array.from({ length: 7 }, (_, i) => ({ from: 'claude:1', id: 'm' + i }));
+      const previous = new Set([rules.messageKey(messages[5])]);
+      assert.deepEqual(Array.from(rules.newMessages(messages, previous)), [messages[2], messages[3], messages[4], messages[6]]);
+      assert.deepEqual(Array.from(rules.newMessages(messages.slice(0, 2), new Set())), messages.slice(0, 2));
+      assert.deepEqual(Array.from(rules.newMessages([], new Set())), []);
+    });
+
+    const members = (...ids) => ids.map((id) => ({ id, role: 'Worker' }));
+    const links = (...pairs) => pairs.map(([from, to]) => ({ from, to }));
+    const completeLinks = (sessions) => links(...sessions.flatMap((a, i) => sessions.slice(i + 1).map((b) => [a.id, b.id])));
+    const graphSnapshot = (graph) => JSON.parse(JSON.stringify({
+      order: graph.order, edges: Array.from(graph.edges),
+      adj: Array.from(graph.adj, ([id, peers]) => [id, Array.from(peers)]),
+    }));
+
+    await t.test('communication graph retains isolated members and all 28 pairs of eight members', () => {
+      const empty = rules.communicationGraph([], []);
+      assert.deepEqual(Array.from(empty.order), []);
+      for (const field of ['edges', 'adj']) assert.equal(empty[field].size, 0, field);
+      const sessions = members('h', 'g', 'f', 'e', 'd', 'c', 'b', 'a');
+      const isolated = rules.communicationGraph(sessions, []);
+      assert.deepEqual(Array.from(isolated.order), ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
+      assert.equal(isolated.adj.size, 8);
+      assert.equal(isolated.edges.size, 0);
+      for (const peers of isolated.adj.values()) assert.equal(peers.size, 0);
+      const messages = completeLinks(sessions);
+      const graph = rules.communicationGraph(sessions, [...messages, ...messages.map((m) => ({ from: m.to, to: m.from }))]);
+      assert.equal(graph.adj.size, 8);
+      assert.equal(graph.edges.size, 28);
+      for (const [key, edge] of graph.edges) {
+        assert.equal(key, JSON.stringify(edge.pair));
+        assert.equal(edge.count, 2);
+      }
+      for (const [id, peers] of graph.adj) {
+        assert.equal(peers.size, 7);
+        assert.equal(peers.has(id), false);
+        for (const peer of peers) assert.ok(graph.adj.get(peer).has(id));
+      }
+    });
+
+    await t.test('unknown endpoints and self messages create neither nodes nor edges', () => {
+      const graph = rules.communicationGraph(members('a', 'b'), links(
+        ['a', 'a'], ['b', 'b'], ['a', 'missing'], ['missing', 'b'], ['unknown', 'missing'],
+        ['a', undefined], [undefined, 'b'], ['a', null], ['', 'b'], ['a', 'b'],
+      ));
+      assert.deepEqual(Array.from(graph.order), ['a', 'b']);
+      assert.deepEqual(Array.from(graph.edges.values(), (edge) => Array.from(edge.pair)), [['a', 'b']]);
+      assert.equal(graph.edges.values().next().value.count, 1);
+      assert.deepEqual(Array.from(graph.adj.get('a')), ['b']);
+      assert.deepEqual(Array.from(graph.adj.get('b')), ['a']);
+    });
+
+    await t.test('bidirectional repeats merge and the greatest timestamp determines type and state', () => {
+      const messages = [
+        { from: 'b', to: 'a', ts: 30, type: 'REVIEW_VERDICT', status: 'approved' },
+        { from: 'a', to: 'b', ts: 10, type: 'ASSIGN' },
+        { from: 'b', to: 'a', ts: 20, type: 'BLOCKED' },
+      ];
+      for (const input of [messages, messages.slice().reverse()]) {
+        const graph = rules.communicationGraph(members('a', 'b'), input);
+        const edge = graph.edges.get('["a","b"]');
+        assert.equal(graph.edges.size, 1);
+        assert.deepEqual(Array.from(edge.pair), ['a', 'b']);
+        assert.equal(edge.count, 3);
+        assert.equal(edge.latest, messages[0]);
+        assert.equal(edge.category, 'review');
+        assert.equal(edge.state, 'complete');
+      }
+      const update = { from: 'a', to: 'b', ts: 40, type: 'PEER_REPLY', status: 'failed' };
+      const edge = rules.communicationGraph(members('a', 'b'), [...messages, update, update]).edges.get('["a","b"]');
+      assert.equal(edge.count, 5);
+      assert.equal(edge.latest, update);
+      assert.equal(edge.category, 'peer');
+      assert.equal(edge.state, 'blocked');
+      const tie = { ...update, type: 'PING', status: '' };
+      const tied = rules.communicationGraph(members('a', 'b'), [update, tie]).edges.get('["a","b"]');
+      assert.equal(tied.latest, tie, 'the last message wins equal timestamps');
+      assert.equal(tied.category, 'other');
+      assert.equal(tied.state, 'observed');
+    });
+
+    await t.test('order survives shuffles and expired links, removes departed members and appends newcomers', () => {
+      const sessions = [{ id: 'n', role: 'Leader' }, ...members('m')];
+      const messages = links(['m', 'n']);
+      const previous = rules.communicationGraph(sessions, messages);
+      const before = graphSnapshot(previous);
+      assert.deepEqual(Array.from(previous.order), ['m', 'n']);
+      const repeated = [...messages, ...links(['n', 'm'], ['m', 'n'])];
+      for (const prior of [undefined, previous]) {
+        assert.deepEqual(Array.from(rules.communicationGraph(sessions.slice().reverse(), repeated, prior).order), ['m', 'n']);
+      }
+      const graph = rules.communicationGraph(
+        [{ id: 'a', role: 'Leader' }, ...members('z'), ...sessions.slice().reverse()],
+        [...messages, ...links(['n', 'z'], ['m', 'a'])], previous,
+      );
+      assert.deepEqual(Array.from(graph.order), ['m', 'n', 'a', 'z']);
+      const expired = rules.communicationGraph([...sessions, ...members('a', 'z', 'b')], [], graph);
+      assert.deepEqual(Array.from(expired.order), ['m', 'n', 'a', 'z', 'b']);
+      assert.equal(expired.edges.size, 0);
+      const removed = rules.communicationGraph(members('z', 'a', 'b'), links(['a', 'b'], ['m', 'a']), expired);
+      assert.deepEqual(Array.from(removed.order), ['a', 'z', 'b']);
+      assert.equal(removed.edges.size, 1);
+      assert.deepEqual(graphSnapshot(previous), before, 'updates leave the previous graph intact');
+    });
+
+    await t.test('edgeType classifies coordination, peer, review and other messages', () => {
+      const cases = {
+        assign: ['ASSIGN', 'JOIN_REQUEST', 'JOIN_ACK', 'ACK_RECEIVED', 'COORDINATION'],
+        peer: ['PEER_REQUEST', 'PEER_REPLY', 'SCOPE_REQUEST', 'SCOPE_REPLY'],
+        review: ['REVIEW_REQUEST', 'REVIEW_FEEDBACK', 'REVIEW_VERDICT', 'REVIEW_RESULT'],
+        other: ['PING', 'PONG', 'BLOCKED', 'COMPLETE', 'UNKNOWN', '', null, undefined],
+      };
+      for (const [category, types] of Object.entries(cases)) {
+        for (const type of types) assert.equal(rules.edgeType(type), category, String(type));
+      }
+    });
+
+    await t.test('edgeState reflects latest message content with blocked taking precedence', () => {
+      const cases = [
+        [{ type: 'BLOCKED' }, 'blocked'], [{ type: 'COMPLETE' }, 'complete'],
+        ...['BLOCKED', 'rejected', 'failed'].map((status) => [{ type: 'PING', status }, 'blocked']),
+        ...['APPROVED', 'completed', 'success'].map((status) => [{ type: 'REVIEW_VERDICT', status }, 'complete']),
+        [{ type: 'BLOCKED', status: 'approved' }, 'blocked'],
+        [{ type: 'COMPLETE', status: 'failed' }, 'blocked'],
+        ...['sent', 'delivered', 'received', 'pending', '', null, undefined].map((status) => [{ type: 'PING', status }, 'observed']),
+        [{}, 'observed'],
+      ];
+      for (const [message, state] of cases) assert.equal(rules.edgeState(message), state, JSON.stringify(message));
+    });
+
+    await t.test('real D3 settles finite cards without overlap for desktop and mobile graphs', async (t) => {
+      const sessions = members('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h');
+      for (const viewport of [{ width: 1200, height: 420 }, { width: 1384, height: 500 }, { width: 366, height: 500 }]) {
+        await t.test(viewport.width + 'x' + viewport.height, () => {
+          for (const messages of [[], completeLinks(sessions)]) {
+            const graph = rules.communicationGraph(sessions, messages);
+            const { nodes, simulation } = rules.forceLayout(rules.d3, graph, new Map(), viewport.width, viewport.height, viewport.width < 600);
+            try {
+              simulation.stop();
+              assert.equal(nodes.length, 8);
+              assert.equal(simulation.nodes(), nodes);
+              for (const [i, a] of nodes.entries()) {
+                assert.ok([a.x, a.y, a.vx, a.vy, a.width, a.height].every(Number.isFinite));
+                assert.ok(a.width > 0 && a.height > 0);
+                if (viewport.width < 600) assert.ok(a.width < 200, 'mobile cards stay compact');
+                const radius = Math.hypot(a.width, a.height) / 2;
+                assert.ok(simulation.force('collision').radius()(a) > radius, 'collision covers the half diagonal plus padding');
+                for (const b of nodes.slice(i + 1)) {
+                  assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= radius + Math.hypot(b.width, b.height) / 2,
+                    a.id + ' and ' + b.id + ' collision circles do not overlap');
+                }
+              }
+              for (const edge of graph.edges.values()) {
+                for (const pair of [edge.pair, edge.pair.slice().reverse()]) {
+                  const a = nodes.find((n) => n.id === pair[0]), b = nodes.find((n) => n.id === pair[1]);
+                  const curve = rules.curvePath(a, b, nodes);
+                  assert.match(curve.d, /^M \S+ \S+ Q \S+ \S+ \S+ \S+$/);
+                  const [x, y, cx, cy, ex, ey] = curve.d.match(/[^MQ\s]+/g).map(Number);
+                  assert.ok([x, y, cx, cy, ex, ey, curve.end.x, curve.end.y].every(Number.isFinite));
+                  assert.deepEqual({ ...curve.end }, { x: ex, y: ey });
+                  for (const [px, py, n] of [[x, y, a], [ex, ey, b]]) {
+                    const rx = Math.abs(px - n.x) / (n.width / 2 + 3);
+                    const ry = Math.abs(py - n.y) / (n.height / 2 + 3);
+                    assert.ok(Math.abs(Math.max(rx, ry) - 1) < 1e-9, 'curve attaches to the padded card border');
+                  }
+                }
+              }
+            } finally { simulation.stop(); }
+          }
+        });
+      }
+      const empty = rules.forceLayout(rules.d3, rules.communicationGraph([], []), new Map(), 366, 500, true);
+      empty.simulation.stop();
+      assert.equal(empty.nodes.length, 0);
+    });
+
+    await t.test('polling deduplicates requests, retains state on failure and respects pause', async () => {
+      const tickStart = script.indexOf('async function tick('), tickEnd = script.indexOf("$('#pause').onclick", tickStart);
+      assert.ok(tickStart >= 0 && tickEnd > tickStart);
+      let requests = 0, finish;
+      const state = { sessions: [{ id: 'a' }], messages: [] };
+      const context = {
+        inFlight: false, paused: false, demo: false, document: { hidden: false },
+        lastState: null, lastSuccess: 0, connectionError: '', AbortSignal,
+        renderConnection() {}, render(st) { context.lastState = st; },
+        fetch(url, options) {
+          requests++;
+          assert.equal(url, '/api/state');
+          assert.equal(options.cache, 'no-store');
+          return new Promise((resolve) => { finish = resolve; });
+        },
+      };
+      const tick = runInNewContext(script.slice(tickStart, tickEnd) + '; tick', context);
+      const pending = tick(false);
+      await tick(true);
+      assert.equal(requests, 1);
+      assert.equal(context.inFlight, true);
+      finish({ ok: true, json: async () => state });
+      await pending;
+      assert.equal(context.lastState, state);
+      assert.equal(context.inFlight, false);
+      const lastSuccess = context.lastSuccess;
+      assert.ok(lastSuccess > 0);
+      context.fetch = async () => { requests++; throw new Error('offline'); };
+      await tick(false);
+      assert.equal(context.lastState, state);
+      assert.equal(context.lastSuccess, lastSuccess);
+      assert.equal(context.connectionError, 'offline');
+      assert.equal(context.inFlight, false);
+      context.paused = true;
+      await tick(false);
+      assert.equal(requests, 2);
+      await tick(true);
+      assert.equal(requests, 3, 'manual refresh remains available while paused');
+      context.paused = false;
+      context.document.hidden = true;
+      await tick(false);
+      assert.equal(requests, 3);
+    });
+  } finally { await new Promise((resolve) => server.close(resolve)); }
 });

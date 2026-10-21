@@ -52,6 +52,29 @@ Every `ASSIGN` / `REDIRECT` that points into the ledger uses `REF:team/<project>
 | `decisions.md` | Owner answers (`BY:owner`) and delegated decisions (`BY:profile` / `BY:decision:<id>`), dated, with reason |
 | `owner.md` | Project owner profile and delegated authority (Owner-confirmed) |
 
+## Recommended plan and roster tables
+
+Use the existing English field names below as table headers so the optional dashboard can parse them. These examples preserve the fields and states defined above; replace the example sessions with complete session IDs. Keep one table per file, outside code fences in the actual ledger files.
+
+`plan.md`:
+
+```markdown
+| id | mission | priority | title | owner | depends on | parallel group | reviewer | DUE | status | receipt IDs |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 17 | dashboard | P1 | Read the team ledger | backend-01 | — | readers | qa-01 | 2026-10-20T12:00:00Z | ASSIGNED | assign-17, ack-17 |
+```
+
+`roster.md`:
+
+```markdown
+| id | address | agent kind | session | created_by | role | workspace | state | current package | authorized peer contacts | last received receipt ID | E | FO | transport |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| backend-01 | local/backend-01 | Claude Code | claude-worker-full-session-id | owner | Worker | /work/demo | ACTIVE | 17 | qa-01 | ack-17 | — | — | native |
+| qa-01 | local/qa-01 | Codex | codex:codex-reviewer-full-session-id | owner | Reviewer | /work/demo-review | ACTIVE | — | backend-01 | — | — | — | native |
+```
+
+Task owner/reviewer values link through an exact roster id or address, then the agent kind and complete session ID; names and shortened IDs are insufficient. The optional, human-run dashboard reads only `plan.md` and `roster.md` from a local snapshot and never automatically fetches or writes the ledger. This human view is not a task channel and does not change the message and pinned-ref rules above.
+
 ## Work package template
 
 ```markdown

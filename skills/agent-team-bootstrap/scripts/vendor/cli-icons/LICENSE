@@ -1,0 +1,22 @@
+THIRD-PARTY ASSET LICENSE STATUS
+
+No third-party icon assets are distributed in this directory. There is no
+bundled SVG to license, and this notice grants no rights to any third-party
+artwork or trademark. Local explanatory text follows the surrounding project's
+license, if any.
+
+Claude Code repository checked:
+https://github.com/anthropics/claude-code/blob/a6e289a2e772a17b3614a9ef43303003de5cd887/LICENSE.md
+The upstream notice states: "© Anthropic PBC. All rights reserved."
+It refers use to Anthropic's Commercial Terms of Service. No icon was copied.
+
+Codex repository checked:
+https://github.com/openai/codex/blob/e18a20d6eb6f5ede32a69fb56e3fe276d5e9d914/LICENSE
+Upstream is Apache License 2.0. Section 6 does not grant permission to use trade
+names, trademarks, service marks, or product names except as required for
+reasonable and customary use in describing the origin of the Work and
+reproducing the NOTICE content. No icon or other Codex asset was copied.
+
+CC and CX are plain-text project abbreviations identifying Claude Code and
+Codex CLI respectively. They are not official logos or a claim of endorsement.
+See README.md for scope, pinned source URLs, and the selection decision.
