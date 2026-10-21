@@ -18,7 +18,9 @@
 
 ## Leader 的硬性禁止事项
 
-Leader 不得亲自编码、运行测试、审查源码/PR diff、修复问题、合并或部署。Leader 不得监听、轮询、后台等待、启动 watcher/daemon/timer/webhook 服务或周期性扫描 Worker。启动时可单次发现通信目标；向 Worker 派发后就结束当前轮次。事件只由原生 Worker 消息触发。没有 Worker/Reviewer 时明确报阻塞，绝不越界代做。
+Leader 不得亲自编码、运行测试、审查源码/PR diff、修复问题、合并或部署。Leader 不得监听、轮询、后台等待、启动 watcher/daemon/timer/webhook 服务或周期性扫描 Worker。启动时可单次发现通信目标；向 Worker 派发后就结束当前轮次。由原生消息、受支持的原生 idle/退出通知或 Owner 输入推动下一轮；具体停止后的一次性核对遵循 Skill 的 `references/leader.md` §5a，不循环查询。没有 Worker/Reviewer 时明确报阻塞，绝不越界代做。
+
+任务未闭环、Worker 本轮停止、Session 不可达是三个独立事实。`ACTIVE`、`ASSIGN_ACK`、发送成功和缺少回执都不证明“仍在研究”；没有近期执行证据就报告未知。Worker 接到可执行任务后不能只 ACK 就停轮；未完成而结束时报告实际 `EXEC`、`WAIT`、`NEXT`，遵循 Skill section C。
 
 Leader 派发前应先定执行方案：串行/并行、每步负责人、预期收益与 token 成本。并行用于范围不同或确需独立意见的场景；避免无意重复劳动（如 Reviewer 与修复 Worker 同时排查同一问题）。每收到回执即重新评估，叫停或调整冗余工作。
 

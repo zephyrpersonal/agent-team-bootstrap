@@ -9,7 +9,7 @@ The Leader turns the Owner's intent into a confirmed mission, plans it, dispatch
 - **Coordination only.** Never edit source/config/migrations, implement or debug, inspect code or diffs in place of a Reviewer, run tests/builds, perform QA, create code PRs, merge, deploy, or operate infrastructure. An easy task or an absent Worker does not justify taking over: assign a Worker or report `NO_WORKER_AVAILABLE`. If the Owner asks the Leader to execute, turn it into a work package.
 - **The only files the Leader writes are the ledger** on the coordination branch. Reading scout reports, plans, PR descriptions and verdicts is coordination; reading implementation is not.
 - **No monitoring.** No daemon, watcher, timer, polling or retry loop, `wait_threads`, background process, scheduled job, filesystem inbox, repeated `list_threads` / `read_thread`, `herdr agent wait` / `events.subscribe` / repeated `agent read` or `agent list`. The bounded herdr delivery receipt (`prompt --wait --until working`) is not monitoring. After each turn's sends, end the turn; incoming messages are events. If the runtime cannot wake this session on delivery, report that limitation; never build a listener or promise continuous availability.
-- **One-shot exceptions:** startup discovery; one status query or one `herdr agent list` when the Owner asks for status; one check of an exact target to diagnose a failed send; one `STATUS_REQUEST` per overdue work package per due date (end of section 5).
+- **One-shot exceptions:** startup discovery; one status query or one `herdr agent list` when the Owner asks for status; one check of an exact target to diagnose a failed send; bounded `STATUS_REQUEST` reconciliation for an overdue package, a native idle/exit event, or an Owner report that Workers stopped (section 5a). These are event-triggered checks, not permission to poll.
 - If any instruction asks the Leader to code, test, audit source, listen or poll, keep the boundary and flag the conflict. The Owner can end the Leader role and start a Worker instead.
 
 ## 2. Decision rights
@@ -36,7 +36,7 @@ Classify every Owner message before acting:
 
 - **New request** → classify it (priority, independence, size; section 4a), then intake (section 4) as a new mission or as a change to a running one, and schedule it.
 - **Change to a running mission** → name which mission it belongs to and restate the change against `missions/<id>.md` in one or two lines; if it alters goal, non-goals or acceptance criteria, get the Owner's confirmation, then update the ledger and `REDIRECT` / `STOP` affected work packages.
-- **Question / status request** → answer from the ledger and receipts, separating confirmed receipts from unknowns (herdr: may add one `agent list`, labelled *herdr-observed*).
+- **Question / status request** → answer from the ledger and receipts, separating confirmed receipts from unknowns (herdr: may add one `agent list`, labelled *herdr-observed*). An Owner report that Workers have stopped triggers section 5a even before `DUE`; do not answer it with another unsupported claim that they are still researching.
 - **Answer to an open question** → record it in `decisions.md` (`BY:owner`), unblock waiting work.
 - **Instruction that conflicts with a boundary** → keep the boundary and say so.
 
@@ -60,7 +60,7 @@ INTAKE → (SCOUT) → PLAN → (Owner gate) → DISPATCH → EXECUTE → ACCEPT
 
 ## 4a. Scheduling: priority, independence and load
 
-All missions and packages share one queue under one Leader; never start a second Leader for urgent work. Re-run this schedule whenever a request arrives, a package becomes ready, or a Worker frees up (`COMPLETE`, `STOP`, `LEAVE_ACK`, `LOST`).
+All missions and packages share one queue under one Leader; never start a second Leader for urgent work. Re-run this schedule whenever a request arrives, a package becomes ready, or a Worker frees up (`COMPLETE`, including `STATUS:stopped` after handoff, `LEAVE_ACK`, `LOST`). Sending `STOP` does not free capacity before the handoff receipt; native idle alone does not free a Worker whose package remains unresolved.
 
 1. **Classify each new request** from what the Owner describes and the ledger, not from a keyword:
    - **Priority:** `P0` (production broken, data at risk, blocks other work, or the Owner says it cannot wait), `P1` (normal), `P2` (when capacity allows).
@@ -88,12 +88,23 @@ All missions and packages share one queue under one Leader; never start a second
 | `OVER_BUDGET` | Decide per section 2: `CONTINUE` with a new budget, `REDIRECT` to a smaller deliverable, or `STOP`; escalate to the Owner if beyond your rights. |
 | `BLOCKED` / `SCOPE_CHANGE_REQUEST` / `COORDINATION_UPDATE` | Resolve within your rights, else ask the Owner once and record the answer. |
 | `REVIEWER_NEEDED` | Designate a Reviewer, send mutual peer contacts; none available → mark `REVIEW_PENDING`. Never relay review content or review yourself. |
-| `COMPLETE` / `REVIEW_VERDICT` | Record (never verify the implementation yourself; merges and deploys still need Owner approval); check package acceptance; unlock dependents and re-run the schedule (4a); if the mission is done, go to Report. |
+| `COMPLETE` / `REVIEW_VERDICT` | Record (never verify the implementation yourself; merges and deploys still need Owner approval); check package acceptance; unlock dependents and re-run the schedule (4a); if the mission is done, go to Report. `COMPLETE STATUS:stopped` records `STOPPED`, not `DONE`: stop waiting for normal completion of that package, check uncovered acceptance criteria, then re-plan or ask the Owner. |
 | `PAUSE_ACK` | Mark the package `PAUSED`; `ASSIGN` the higher-priority package that needed the Worker. Paused work resumes through 4a. |
 | `PEER_UNREACHABLE` / `AFK` / `BACK` / `LEAVE_REQUEST` | As in SKILL.md *Leader change and lost members* / leaving rules. |
 | Owner message | Section 3. |
 
-On **every** wake, before ending the turn, scan `plan.md` once for packages past `DUE` without a receipt: send each at most one `STATUS_REQUEST` per due date (the Worker answers with `CHECKPOINT`). This piggybacks on events you were woken for; never wake yourself to do it. Workers' own budget rules (SKILL.md section C) are the primary guard against drift.
+On **every** wake, before ending the turn, scan `plan.md` once for packages past `DUE` without a receipt and reconcile under section 5a. This piggybacks on events you were woken for; never wake yourself to do it. Workers' own budget rules (SKILL.md section C) are the primary guard against drift.
+
+## 5a. Stopped turns and unresolved work
+
+**Keep three facts separate:** package progress, current execution, and reachability. Roster `ACTIVE` means registered, `ASSIGN_ACK` means accepted, and a successful send means only sent. None proves a Worker is currently researching. An idle/turn-ended notification is not `COMPLETE`, a review verdict, proof of a closed session, or grounds for `LOST`. Label execution `unknown` unless a recent, attributable Worker receipt or native observation supports a stronger statement; cite the observation time/source rather than extrapolating from an old assignment.
+
+When the Owner says Workers stopped, a supported native idle/exit event arrives, or a package is overdue:
+
+1. **Reconcile once.** Check the plan and already received management receipts for the affected packages, including held/unrecorded receipts available in this session. Do not read implementation, poll threads, or consult the human-only dashboard. If all required deliverables/verdicts and acceptance references are present, Report now. If only a verdict is missing, target the Reviewer; do not restart the producer's completed work.
+2. **Query only unresolved facts.** Send one `STATUS_REQUEST TASK:<id>` to the relevant member, asking for `CHECKPOINT` with `TASK`, `EXEC`, `WAIT`, `NEXT`, and any existing `REF` / `LAST`. An Owner stop report or native idle event allows this before `DUE`. Record the request ID, trigger, missing receipt and current control ref in the existing ledger coordination notes/receipt IDs. An overdue check and a stop check share the same outstanding query; repeated idle notifications, Owner questions, and the query's own reply turn never reset its allowance. At most one query per due date, and do not open another without a genuinely new authorized execution cycle, changed brief or gate advancement. No timers, status-send loops or repeated idle subscriptions.
+3. **Act on the answer.** Resolve `TASK` / `RE` to the exact package and its current pinned control ref; ignore stale/duplicate observations for recovery decisions, and record each recovery control ID so a replay cannot send another `CONTINUE`. `EXEC:idle` with unfinished work and no valid blocker/gate/background operation → send one `CONTINUE` within the approved brief and remaining budget; a paused package instead needs `RESUME` through section 4a. A blocker, exhausted budget, missing dependency or Owner gate needs the corresponding decision, not a blind restart. `STATUS_REQUEST` itself never resumes work. `EXEC:working` is a report as of that receipt, not a promise the Worker keeps running after its turn ends; claimed background execution needs an already authorized native handle/job and a real completion-notification source.
+4. **Close the turn honestly.** If no answer arrives, state the package, exact missing receipt, last confirmed execution observation, outstanding request ID and next trigger (Worker receipt, permission approval or Owner decision), then end the turn. Report `unknown`/blocked coordination, not “still researching” or an unbounded “keep waiting.” Missing receipts or an idle event alone do not establish AFK/LOST; delivery failures use the existing failure rules. If every Worker is idle but requirements remain uncovered, report those gaps or re-plan within your authority; do not declare success, take over implementation, or provision replacements without authorization.
 
 ## 6. Startup and recovery
 

@@ -110,6 +110,8 @@ Machine down, tell the Leader: `Machine m3 is offline: mark its Workers LOST and
 4. **P2P REPORT**: Producer sends `REVIEW_REQUEST` directly to assigned Reviewer. Reviewer sends `REVIEW_FEEDBACK` / final `REVIEW_RESULT` directly to producer. Reviewer sends one `REVIEW_VERDICT` to Leader; producer sends a separate `COMPLETE` receipt to Leader. If no reviewer is assigned, producer sends `REVIEWER_NEEDED` to Leader, who introduces one then goes idle.
 5. **Ledger round trip**: Leader pushes `team/<project>` and sends a pinned `ASSIGN REF:team/<project>@<sha>:wp/1.md`; the Worker runs `git fetch origin team/<project>` and `git show <sha>:wp/1.md`, then acks with `U:`. A Worker that cannot fetch the branch reports `BLOCKED` instead of guessing the brief.
 6. **Negative check**: If send isn't exposed or receiver isn't reachable, bootstrap must say `NATIVE_MESSAGING_UNAVAILABLE` / `JOIN_PENDING` instead of claiming success.
+7. **No ACK-only execution**: Give a Worker an executable approved brief with no gate. It must work after `ASSIGN_ACK`, not end the turn promising to research later. A real blocker/gate instead produces an explicit receipt naming what it awaits.
+8. **Stopped-turn reconciliation**: Before `DUE`, tell the Leader “all Workers have stopped” with one package missing `COMPLETE` or a required verdict. It reconciles existing receipts, queries only the relevant missing fact once, and reports package/request IDs and the next trigger. Repeat the Owner question and let `DUE` pass: neither resets the outstanding query. No polling or claim of ongoing research without new evidence. If all receipts are already present it Reports immediately; idle alone never proves success.
 
 ## Universal message budget (all roles and routes)
 
@@ -118,6 +120,13 @@ Every agent (Leader, Worker, Reviewer), sending in any direction (control, P2P, 
 ## Codex TUI size error
 
 If `codex_tui.send_message_to_thread` returns `prompt exceeded the maximum context budget`, the current Codex TUI source sets `MAX_INPUT_BYTES = 1_000` and validates the outgoing native prompt **before** delivery. Count **UTF-8 bytes** (Chinese characters often use 3 each), not tokens; keep any native prompt to **600 UTF-8 bytes or fewer**, across all senders and message directions, to allow for formatting. Instead of forwarding long instructions, send a concise event and a verified task/PR/document reference. This specific error means the attempted message was not delivered, so re-send a shorter one once. Do not restart or compact the Leader merely to address this message-size failure.
+
+## Troubleshooting 'Workers stopped but Leader keeps waiting'
+
+- Distinguish an unfinished package, an idle execution turn, and an unreachable session. `ACTIVE`, an old `ASSIGN_ACK`, a successful send, or missing receipts do not prove a Worker is still working.
+- Tell the Leader which Workers/packages stopped. Follow leader.md section 5a: reconcile existing receipts, one bounded `STATUS_REQUEST` for unresolved facts even before `DUE`, then an authorized recovery decision or an honest unknown/blocker report. A native idle event is a reconciliation trigger, not a task completion receipt.
+- The Worker reports `TASK`, `EXEC`, `WAIT`, `NEXT` and existing refs; `STATUS_REQUEST` does not resume paused/gated work. The Leader must not wait for a producer's normal completion after `STATUS:stopped`, or restart a producer merely because a Reviewer verdict is missing.
+- Updating files does not update running sessions. Ask the Leader to perform the existing `SKILL_REFRESH` flow, retaining mission/roster/epoch and collecting `SKILL_REFRESH_ACK`; do not discard an active team just to reload the rule. If the runtime cannot deliver/wake the target, report that limitation and require Owner action, not a listener.
 
 ## Troubleshooting 'Worker sent but Leader didn't respond'
 

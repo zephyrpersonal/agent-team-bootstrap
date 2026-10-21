@@ -80,12 +80,12 @@ P:wms T:PEER_REQUEST ID:fe12 FROM:fe01 TO:be01 Q:order status enums? ACK:1
 | `JOIN_REQUEST` | Worker → Leader | `JOIN_ACK` accepting, adjusting or rejecting scope |
 | `JOIN_ACK` | Leader → Worker | `ACK_RECEIVED` (only if accepted and verified) |
 | `ASSIGN` | Leader → registered Worker, `REF:team/<p>@<sha>:wp/<id>.md` | `ASSIGN_ACK U:<one-line restatement>` or `BLOCKED` with a question |
-| `CHECKPOINT` | Worker → Leader at a planned milestone, or answering `STATUS_REQUEST` | None if on track; `CONTINUE` at a gate; `REDIRECT` / `STOP` if drifting |
+| `CHECKPOINT` | Worker → Leader at a planned milestone, before an unfinished turn stops, or answering `STATUS_REQUEST` | Preserve `STATE:on-track|risk`; a stop/status reply also carries `TASK`, `EXEC`, `WAIT`, `NEXT` (below). None if on track; `CONTINUE` at a gate or authorized idle recovery; `REDIRECT` / `STOP` if drifting |
 | `OVER_BUDGET` | Worker → Leader past `DUE` / `ROUNDS` or scope estimate | `CONTINUE` with a new budget, `REDIRECT` or `STOP` |
 | `CONTINUE` | Leader → Worker | None |
 | `REDIRECT` | Leader → Worker, new pinned brief ref | `ASSIGN_ACK` with a new `U:` |
 | `STOP` | Leader → Worker | Worker pushes, hands off, `COMPLETE STATUS:stopped` |
-| `STATUS_REQUEST` | Leader → Worker, once per overdue package per due date | `CHECKPOINT` |
+| `STATUS_REQUEST` | Leader → Worker for an overdue package or event-triggered stopped-turn reconciliation; shared one-shot budget per leader.md section 5a | `CHECKPOINT` with actual execution / wait / next trigger; report only, not permission to resume |
 | `PAUSE` | Leader → feature Worker, to free it for a P0 package | Push, `CHECKPOINT`, `PAUSE_ACK` |
 | `RESUME` | Leader → paused Worker, pinned original brief | `ASSIGN_ACK` with `U:` |
 | `PEER_REQUEST MODE:consult` | Worker outside your package → you | Busy: one short `PEER_REPLY` from memory or `A:needs-investigation`; idle: may investigate read-only first |
@@ -111,6 +111,17 @@ P:wms T:PEER_REQUEST ID:fe12 FROM:fe01 TO:be01 Q:order status enums? ACK:1
 | `BACK_ACK` | Worker → returned Leader | None |
 | `STALE_LEADER` | Worker → Leader with a lower epoch | None; that Leader stands down and tells its Owner |
 | `ACK_RECEIVED` / `PONG` | Receiver → sender | No automatic recursive ACK |
+
+## Execution reconciliation
+
+A package's `STATE:on-track|risk` describes progress, not liveness. On a stopping checkpoint or status reply, add `TASK:<package> EXEC:working|idle|blocked|unknown WAIT:<reason|none> NEXT:<event/action>`; use short tokens to stay within 600 UTF-8 bytes. `EXEC:working` is an observation at send time, not proof that execution survives the end of the turn. A legitimate gate wait is `EXEC:idle WAIT:CONTINUE`; a real background operation must identify its authorized native job/handle and completion-notification source. Missing execution fields in older receipts mean unknown, never working by default. An idle notification or a successful send never substitutes for `COMPLETE` / independent `REVIEW_VERDICT`.
+
+```text
+P:shop T:STATUS_REQUEST ID:l52 TASK:WP-17 Q:execution-and-missing-receipt
+P:shop T:CHECKPOINT ID:fe53 RE:l52 TASK:WP-17 STATE:risk EXEC:idle WAIT:CONTINUE NEXT:resume-same-brief REF:branch@abc123 LAST:fe49
+```
+
+The Leader resolves the wait or explicitly resumes approved work; it does not repeatedly query, assume background progress, or treat the status reply itself as a new execution cycle. See leader.md section 5a.
 
 ## JOIN_ACK example
 
