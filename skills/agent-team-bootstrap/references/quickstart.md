@@ -48,6 +48,20 @@ Tell Leader:
 Prepare a Worker with responsibility 'front-end order list'. If real independent-thread creation is callable and authorized, create it and send the bootstrap prompt; otherwise provide it for manual start. Require JOIN_REQUEST/JOIN_ACK. After dispatch, end the turn and wait for native Worker receipts without polling or listening. Do not do Worker execution yourself.
 ```
 
+### Autonomous staffing for role-bound restrictions
+
+An Owner may tell the Leader once:
+
+```text
+For this mission, match Worker responsibilities and execution limits before assigning. Use an eligible idle Worker first; otherwise create a suitable independent Worker within Max Workers and the approved budget. If a scout's session is read-only, do not repeatedly ask me to unlock it for execution. This authorizes staffing, not deployments, DB changes, production access or permission bypass; those keep their explicit approval gates.
+```
+
+The Leader records this authorization/source once in `decisions.md`, not by self-editing Owner delegation. After a separately approved staging request, use an eligible deployment Worker or create one under that staffing grant; pass its pinned brief, approval provenance and safe handoff refs. Keep migration execution and production excluded when not approved. Before mutating overlapping resources, finish the old Worker's permitted handoff; do not demand forbidden push from a read-only session. Unknown restriction scope, exhausted capacity/budget, missing creation tools or runtime denial requires one specific escalation, never repeated spawning.
+
+To additionally choose full-access startup, the Owner can specify `New herdr Workers: full-access launch mode for this team; discover each installed CLI's supported arguments via help, record and verify the mode; task approvals and DB/production gates remain unchanged.` The Leader follows transports.md's full-access procedure; it does not silently change existing sessions or use automatic-review flags as if they disabled the sandbox. Full access is a deliberate reduction in host protection, not a default granted by installing this Skill.
+
+Leader-created bootstrap should label temporary limits as `Source: leader-phase; Phase: scout; Advance: pinned REDIRECT after M1`, separately from actual Owner task/team prohibitions. A valid phase change advances only that gate and does not invent missing approvals.
+
 ## Worker-to-Worker collaboration (no Leader relay)
 
 Once frontend and backend Workers are registered, they can use their **verified peer native addresses** to communicate directly, e.g.:

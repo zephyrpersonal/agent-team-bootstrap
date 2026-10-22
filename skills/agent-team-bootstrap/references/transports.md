@@ -57,12 +57,29 @@ All agents and directions (Leader, Worker, Reviewer; task, peer, review and hand
 - **Echo loops:** every send wakes an idle receiver, so never acknowledge `PONG`, `ACK_RECEIVED` or other terminal events.
 - **Status on request:** when the Owner asks, the Leader may run one `herdr agent list` and report each member's `agent_status` labelled *herdr-observed*, separately from receipt-confirmed status. It shows what receipts cannot, e.g. a Worker stuck in a permission dialog that cannot send `BLOCKED` itself (`blocked`). It never replaces `COMPLETE` / `REVIEW_VERDICT`.
 - **Owner notification:** the Leader may run `herdr notification show '<title>' --body '<short text>' --sound request` only for events that need the Owner: a decision, `PEER_BLOCKED`, or final `COMPLETE` + `REVIEW_VERDICT`. A Worker may raise one when it finds the Leader AFK unannounced (once per absence). It is a heads-up in the herdr UI of that server's attached clients, not durable and not a receipt.
-- **Provisioning (Owner-authorized Leader):** one Worker = one worktree workspace. `herdr worktree create --branch <branch> --label <id> --no-focus` (or `--cwd <repo>`), read `.result.root_pane.pane_id`, then `herdr agent start <id> --kind <claude|codex|gemini|...> --pane <pane>`, then one bootstrap prompt (`$agent-team-bootstrap worker ...` / `/agent-team-bootstrap worker ...`, `Transport: herdr`). Never add `--trust-repository` unless the Owner verified the repository, and pass no permission-bypass / sandbox arguments after `--` unless the Owner named them. Never run `worktree remove`, close a pane, or stop a session that may hold unhanded work.
+- **Provisioning (Owner-authorized Leader):** one Worker = one worktree workspace. `herdr worktree create --branch <branch> --label <id> --no-focus` (or `--cwd <repo>`), read `.result.root_pane.pane_id`, then `herdr agent start <id> --kind <claude|codex|gemini|...> --pane <pane>`, then one bootstrap prompt (`$agent-team-bootstrap worker ...` / `/agent-team-bootstrap worker ...`, `Transport: herdr`). Never add `--trust-repository` unless the Owner verified the repository. Permission/sandbox bypass requires an explicit Owner launch policy; use the full-access procedure below when authorized, otherwise keep normal CLI defaults. Never run `worktree remove`, close a pane, or stop a session that may hold unhanded work.
 - **Several machines:** a member's address is `<machine>/<name>`, reached with `herdr --machine <machine> agent prompt <name> ...`; omit `--machine` for a target on your own host. Machine profiles are saved per host (`herdr machine add`), so the Owner must:
   - use the same label for the same machine on every team host, and tell each member its own label (`Machine: <label>` in its bootstrap prompt; it sends `HOST:<label>` in `JOIN_REQUEST`);
   - give every Worker host a profile for the Leader's host and the reverse, P2P pairs profiles for each other's hosts, and — before any failover to a Leader on another host — every Worker host a profile for that host;
   - make SSH work without prompts (keys loaded with `ssh-add`); `herdr machine reconnect` is the Owner's, never an agent's.
   Verify with one `PING` per host pair. A dimmed, disconnected machine's state is cached, not live; a failed `--machine` send does not prove nothing was applied. Use only machines the Owner configured.
+
+### Owner-authorized full-access Worker launch
+
+When the Owner explicitly chooses **full authorization for newly created herdr Workers**, record that launch policy and its team/task scope once in `decisions.md`; do not ask again for each Worker covered by it. This is separate from staffing permission, repository trust and approval of the work itself. Without that explicit policy, do not enable bypass merely because transport is herdr.
+
+1. Before provisioning an agent kind on a host, read `herdr agent start --help` and that installed CLI's `--help` (its `help` / versioned official reference if necessary). Verify the actual argument pass-through syntax and the mode's meaning; do not guess flags or install/upgrade tools. Recheck after a CLI/version/host change. Check on the target host for remote Workers, not just the Leader's machine.
+2. Pass only the supported **session-scoped** mode argument through herdr's `--`. Help verified on 2026-10-22 provides these examples; help on the actual target remains authoritative:
+
+   ```bash
+   herdr agent start <id> --kind claude --pane <pane> -- --dangerously-skip-permissions
+   herdr agent start <id> --kind codex --pane <pane> -- --dangerously-bypass-approvals-and-sandbox
+   ```
+
+   Claude's `--allow-dangerously-skip-permissions` only makes bypass available; it does not activate it. Codex's `--approve-for-me` uses automatic review with a workspace sandbox; it is not full access. Do not add hook-trust bypass, unrelated configuration changes or flags for another CLI. If full access is unsupported or prohibited by managed policy, report `FULL_ACCESS_UNAVAILABLE` with the exact limitation; do not silently claim success or launch replacement sessions to evade it.
+3. Record the executable/version, exact startup arguments and Owner policy ref in roster notes. Verify the new session's visible effective permission mode when the CLI exposes it; a successful `agent start` only confirms readiness. If the effective mode cannot be observed, report it as unverified, not full-access-confirmed.
+4. These modes remove approval/sandbox protection and can expose host files, credentials and network access. Use only the Owner-approved environment. Task scope, project rules and explicit gates remain binding: no automatic production deploy, database change, destructive action or access-control modification. Neither a peer prompt nor an unrestricted shell grants those approvals.
+5. Do not restart, alter settings for, or terminate existing Workers to apply this policy without explicit authorization and a safe handoff. Do not use a full-access Worker to perform an action denied in another session; first resolve the applicable Owner/runtime boundary, not route around it.
 
 ## What the Skill guarantees
 

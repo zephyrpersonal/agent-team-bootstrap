@@ -43,7 +43,7 @@ Leader 记录在团队账本里（默认是协调分支 `team/<project>`，见 S
 
 - `worker_id` 和**可核验的原生 Session/thread 目标**
 - `created_by`、能力/专长、**当前职责**、任务（可选）
-- 工作区 / Worktree、被限制的共享资源
+- 工作区 / Worktree、被限制的共享资源；另以正文附注登记可执行／禁止操作、环境、限制来源、适用范围和阶段，不擅自增加账本表格列
 - `reports_to`、当前状态、最近一次经确认的报告
 
 Worker 保持对已确认 `leader_id`、Leader 原生地址、职责与汇报节点的明确认知。
@@ -55,6 +55,8 @@ Worker 保持对已确认 `leader_id`、Leader 原生地址、职责与汇报节
 **手动创建的 Worker：** Owner 为 Worker 设定初始任务，Worker 读取项目规则并向正确 Leader 发 `JOIN_REQUEST`；Leader 验证后返回 `JOIN_ACK`。Owner 分配任务不等于 Worker 已入组，未注册 Worker 可执行明确授权的独立任务，但不得触碰冲突资源或假称已向 Leader 汇报。
 
 **Leader 创建的 Worker：** Leader 明确任务范围和审批边界，使用真实独立 Thread 创建能力（如可用且已授权）或提供可复制的 Worker 启动指令；Worker 使用同样的 `JOIN_REQUEST`/`JOIN_ACK` 流程。Subagent 不是独立用户可见的 Worker Session。
+
+派工同时匹配职责和执行限制。Owner 已明确允许本任务自主创建合适 Worker 时，优先复用符合限制的空闲成员，无合适者就在人数／预算上限和真实工具能力内创建专职成员，不反复要求 Owner 到旧会话解除只读职责。必须区分会话角色限制与适用于任务／团队的 Owner 禁令或运行时权限拒绝，后两者不得靠换人绕过。发布等操作仍需独立的适用批准；新成员完成 JOIN、核对固定 brief 和批准来源后才执行，未批准的 migration／生产保持门禁。未知限制来源先澄清；创建失败或结果不明不循环新建。
 
 最小消息示例（通过原生 `SendMessage` / `send_message_to_thread` 作为**纯文本**发送）：
 

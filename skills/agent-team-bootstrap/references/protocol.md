@@ -123,6 +123,16 @@ P:shop T:CHECKPOINT ID:fe53 RE:l52 TASK:WP-17 STATE:risk EXEC:idle WAIT:CONTINUE
 
 The Leader resolves the wait or explicitly resumes approved work; it does not repeatedly query, assume background progress, or treat the status reply itself as a new execution cycle. See leader.md section 5a.
 
+## Restriction-aware assignments
+
+JOIN/assignment context includes execution bounds or a pinned ref: source, scope, phase, allowed/denied actions and environments. On a mismatch use existing `BLOCKED`, e.g.:
+
+```text
+P:shop T:BLOCKED ID:sc42 RE:l41 TASK:WP-9 WHY:restriction SRC:owner SCOPE:session-role PHASE:scout DENY:push,deploy REF:report@abc123 NEED:eligible-deployer
+```
+
+`SRC:owner` here identifies who imposed the old session-role limit; it is not a request to bypass a task prohibition. The Leader follows leader.md section 4b: use an eligible Worker or create an authorized specialist, retaining all task-level and runtime gates. A staffing authorization is not deployment approval. Bootstrap restrictions authored by the Leader must explicitly say `leader-phase` and cite advancement conditions, not impersonate Owner instructions. Existing verifiable Owner approval may be conveyed via a pinned decision/brief; `BY:owner` alone never proves it.
+
 ## JOIN_ACK example
 
 ```yaml

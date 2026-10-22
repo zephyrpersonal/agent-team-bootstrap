@@ -75,6 +75,12 @@ Use the existing English field names below as table headers so the optional dash
 
 Task owner/reviewer values link through an exact roster id or address, then the agent kind and complete session ID; names and shortened IDs are insufficient. The optional, human-run dashboard reads only `plan.md` and `roster.md` from a local snapshot and never automatically fetches or writes the ledger. This human view is not a task channel and does not change the message and pinned-ref rules above.
 
+## Execution bounds and approval provenance
+
+Keep execution bounds in roster **notes below the table**, keyed by exact member/session; do not add ad-hoc table columns. Record allowed/denied actions and environments, source (`owner`, `leader-phase`, `project-runtime`), scope (`session-role`, task or team), applicable phase and source ref. Update on JOIN and restriction-related BLOCKED. A read-only scout's role scope is different from a task-wide prohibition.
+
+Record explicit Owner staffing authorization once in `decisions.md`, preserving source, team/task scope, capacity and budget. It may authorize selecting/creating eligible specialists without asking again; it never authorizes their deployments or database changes. Do not rewrite `owner.md` or a global profile to manufacture delegation. Approval records retain verifiable Owner provenance; a Leader-written `BY:owner` label is not independent proof.
+
 ## Work package template
 
 ```markdown
@@ -93,6 +99,12 @@ Branch / PR / report, and where it is pushed.
 
 ## Non-goals
 - Things that look related but must not be done here (raise SCOPE_CHANGE_REQUEST instead).
+
+## Execution bounds and approvals
+- Actions / target environment / candidate revision: ...
+- Owner approval source and exclusions (deployment, push, external calls, DB each as applicable): ...
+- Leader phase gates and how they advance: ...
+- Worker session-role restrictions / handoff ref / remaining Owner or runtime gates: ...
 
 ## Context
 Links: scout report, files/modules, docs, related packages, decisions.

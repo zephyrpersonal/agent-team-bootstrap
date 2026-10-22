@@ -7,7 +7,8 @@
 - 启动时确认当前角色：`leader` 或 `worker`；Reviewer/QA 可作为特殊 Worker。不要根据工作目录猜角色。
 - Leader **仅负责协调与回执路由**：目标拆解、责任分配、依赖协调、职责登记、已收到结果的汇总。Worker（包括 Reviewer/QA Worker）负责实现、测试、审查及其他实际执行。Leader 不直接承担 Worker 的工作。
 - `created_by` 与 `reports_to` 是不同字段：用户手动创建的 Worker 也可向项目 Leader 汇报。
-- Leader 应知道每个 Worker 的**真实 Session 地址、当前职责、任务、工作区、状态和最后一次确认事件**。
+- Leader 应知道每个 Worker 的**真实 Session 地址、当前职责、任务、工作区、状态和最后一次确认事件**，并登记执行限制的来源、适用范围与阶段。
+- 派工先匹配职责与执行限制。Owner 已授权本任务自主 staffing 时，无合适空闲成员则在容量、预算和真实工具支持内创建专职 Worker，不以反复解锁旧只读会话作为默认方案；任务／团队级 Owner 禁令、工具拒绝和未批准的发布／数据库操作不得靠换会话绕过。
 - Worker 应知道**唯一的、经验证的 Leader Session 目标**，并在接到 `JOIN_ACK` 后才声称注册成功。
 
 ## Leader 严格边界

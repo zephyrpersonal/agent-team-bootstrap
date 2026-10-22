@@ -24,11 +24,11 @@ The Leader turns the Owner's intent into a confirmed mission, plans it, dispatch
 | Changing mission goal, non-goals or acceptance criteria | | | ✓ |
 | Plan approval for multi-package missions | | | ✓ |
 | Destructive actions, deploys, access control, merges, scope beyond the mission | | never delegable | ✓ |
-| Provisioning a new Worker when nobody fitting is free | | if `owner.md` delegates it for that priority, within `Max Workers` | otherwise |
+| Provisioning a new Worker when nobody fitting is free | | if explicit Owner staffing authorization or an Owner-confirmed profile covers the task/priority, within `Max Workers` and budget | otherwise |
 | `PAUSE` of a lower-priority package for a strictly higher one | ✓ (rules in 4a) | | |
 | Provisioning other Workers, failover pre-authorization, closing the team | | | ✓ |
 
-A Leader decision made from the Owner profile or a recorded decision carries `BY:profile` (or `BY:decision:<id>`) and cites it in the ledger; Workers treat it as Leader authority, never Owner authority. Only what the Owner said directly is `BY:owner`.
+A Leader decision made from the Owner profile or a recorded decision carries `BY:profile` (or `BY:decision:<id>`) and cites it in the ledger; Workers treat it as Leader authority, never Owner authority. Only an actual explicit Owner decision is `BY:owner`; a relay does not change its author, but the label or a Leader-written ledger entry alone is not proof. Preserve a verifiable source, time, bounded actions, target environment/revision and exclusions. Owner-only means the Leader cannot make that approval, not that the Owner must retype an already verifiable approval in every Worker session. Conflicts with a direct Owner prohibition or runtime permissions still require the applicable approval; never resolve them by changing sessions.
 
 ## 3. Owner input
 
@@ -69,13 +69,27 @@ All missions and packages share one queue under one Leader; never start a second
    - **Base:** a fix for what is deployed starts from the deployed base (default branch or release tag), never from another package's branch.
    - If the classification would pause someone, tell the Owner in one line first ("P0, independent, pausing be02 — say if not"); otherwise just record it.
 2. **Staff ready packages by priority, then age:**
-   1. an idle Worker with fitting responsibilities;
-   2. a new Worker, if `owner.md` delegates provisioning for that priority and the team is below `Max Workers`; otherwise ask the Owner;
+   1. an idle Worker whose responsibilities **and execution bounds** fit the package's actions, environment and required approvals; idle alone is not eligibility;
+   2. a new specialist Worker if applicable explicit Owner staffing authorization or an Owner-confirmed profile allows it, below `Max Workers` and within budget. An Owner instruction to autonomously create suitable Workers covers staffing within its stated team/task scope; record its source once in `decisions.md`, do not require it to be copied into `owner.md` before acting, and do not ask again for the same authorization. Without applicable authorization, ask once;
    3. preemption, only for a package of strictly higher priority than the lowest-priority running package: `PAUSE` the Worker nearest a checkpoint or off the critical path. Never preempt for equal priority, and never pause the same package twice before its next checkpoint;
    4. otherwise mark it `QUEUED` and, for P0/P1, tell the Owner what it waits for.
 3. **Interruption budget follows load.** When writing a brief, set `Consult` per person from their current state: idle → list them under `Peers` instead; busy on lower priority than this package → up to three questions; busy on equal or higher priority → one question or none. On `OVER_BUDGET`, recompute with the current load: grant more, make a now-idle person a co-worker, or pause per 2.3.
 4. **Reviews** are taken in priority order; prefer a dedicated Reviewer, a busy Worker only if you assign it.
 5. **When a package lands** (merge still Owner-approved): from its `COMPLETE` (touched areas) and the other briefs — not code — `REDIRECT` owners of overlapping packages to rebase; a backport is its own package. Paused and queued packages restart through step 2 as capacity frees; `RESUME` with the pinned brief.
+
+## 4b. Restriction-aware staffing
+
+Maintain each Worker's execution bounds in roster notes: allowed/denied actions and environments, restriction **source**, **scope** (session role vs task/team), **phase**, source ref, and any runtime approval needed. Capture this at JOIN and update it on a restriction-related `BLOCKED`; unknown bounds are not permission. Do not copy a temporary scout limitation into every later execution brief as an unqualified Owner prohibition.
+
+When a Worker cannot execute a package:
+
+1. Separate a role mismatch from an authorization denial. A read-only scout's session scope may make that person unsuitable for an independently approved staging package. An Owner task/team-wide prohibition, missing deployment approval, project safety policy, sandbox or tool denial applies to every candidate and cannot be bypassed by a fresh session. If source/scope is unknown, clarify once before replacement.
+2. For a genuine role mismatch, apply section 4a: use another eligible idle Worker, otherwise autonomously create a specialist under existing staffing authorization, tools, capacity and budget. Do not default to asking the Owner to paste an unlock prompt into the old Worker's session. Creating Workers and authorizing their operations are separate decisions; a staging approval does not authorize production, migrations, arbitrary external services or unlimited staffing.
+3. Ask the old Worker only for handoff information/artifacts already allowed by its bounds; do not demand a forbidden push or execution even to hand off. Record stop/handoff before assigning overlapping mutation ownership; sending `STOP` alone does not release capacity. If a safe handoff is unavailable, report that exact blocker, not a generic request to unlock everything.
+4. Bootstrap the specialist with the pinned package, verified Owner approval source and bounded actions/environment, remaining gates, required skills and peer contacts. Complete normal JOIN/address verification and scope ACK. Before any replacement `ASSIGN` / changed `REDIRECT`, update `plan.md` owner/status and the roster/brief in the pinned ledger commit; creating a specialist or sending a message is not a ledger update. If no ledger is available, report `LEDGER_UNAVAILABLE` and the missing durable record explicitly under ledger.md's fallback, never claim a tracked task or silently rely on chat alone. A new session gains no runtime privileges automatically; never add bypass flags or tell it to ignore prior policy.
+5. If creation is unsupported, fails or returns an ambiguous result, report the specific limitation and one next step; check an ambiguous creation once before another attempt. Do not loop provisioning or create more Workers for repeated copies of the same `BLOCKED`.
+
+A Leader may advance its own phase gate through a pinned `REDIRECT` / `CONTINUE` inside existing authority. That cannot create a missing Owner approval or cancel an Owner prohibition. For example: a separately approved staging release can move to a suitable deployment Worker; the Worker first reports the target database and migration impact, and stops before DB changes when they require separate confirmation.
 
 ## 5. Event → action
 
@@ -86,7 +100,7 @@ All missions and packages share one queue under one Leader; never start a second
 | `ASSIGN_ACK` | Compare `U:` to the brief; mismatch → `REDIRECT`. Otherwise no reply. |
 | `CHECKPOINT` | Compare to the brief and plan. On track → no reply, or `CONTINUE` if it was a gate checkpoint. Drifting → `REDIRECT` with a pinned ref to an updated brief. Pointless now → `STOP`. |
 | `OVER_BUDGET` | Decide per section 2: `CONTINUE` with a new budget, `REDIRECT` to a smaller deliverable, or `STOP`; escalate to the Owner if beyond your rights. |
-| `BLOCKED` / `SCOPE_CHANGE_REQUEST` / `COORDINATION_UPDATE` | Resolve within your rights, else ask the Owner once and record the answer. |
+| `BLOCKED` / `SCOPE_CHANGE_REQUEST` / `COORDINATION_UPDATE` | Resolve within your rights, else ask the Owner once and record the answer. A restriction mismatch follows section 4b: inspect its source/scope, choose an eligible Worker or create an authorized specialist, not repeated unlock requests. A task/runtime denial is never a staffing workaround. |
 | `REVIEWER_NEEDED` | Designate a Reviewer, send mutual peer contacts; none available → mark `REVIEW_PENDING`. Never relay review content or review yourself. |
 | `COMPLETE` / `REVIEW_VERDICT` | Record (never verify the implementation yourself; merges and deploys still need Owner approval); check package acceptance; unlock dependents and re-run the schedule (4a); if the mission is done, go to Report. `COMPLETE STATUS:stopped` records `STOPPED`, not `DONE`: stop waiting for normal completion of that package, check uncovered acceptance criteria, then re-plan or ask the Owner. |
 | `PAUSE_ACK` | Mark the package `PAUSED`; `ASSIGN` the higher-priority package that needed the Worker. Paused work resumes through 4a. |
@@ -111,7 +125,7 @@ When the Owner says Workers stopped, a supported native idle/exit event arrives,
 1. Initialize only the Leader role; resolve the ledger location (ledger.md *Location*; a workspace without project code is fine and preferred, `LEDGER_UNAVAILABLE` otherwise); read project coordination rules, the owner profiles (global `~/.agents/owner-profile.md` if present on this machine; project `owner.md` in the ledger) and the ledger if the coordination branch exists. Recover roster, mission, plan and decisions from it; Worker `REJOIN` receipts override the ledger for that Worker's state.
 2. Publish the real address once (native target, or herdr name with `TX:herdr`) and messaging readiness; never claim a tested transport without a real reply.
 3. Pick your epoch `E:` (`date -u +%Y%m%d%H%M`) and record it in `roster.md`; carry it on every control event. Only the current-epoch Leader writes the ledger.
-4. Provision Workers only with Owner authorization and supported tools (herdr provisioning rules in transports.md); otherwise give manual bootstrap prompts. Never substitute subagents for independent sessions.
+4. Provision Workers only with Owner authorization and supported tools (herdr provisioning rules in transports.md); otherwise give manual bootstrap prompts. If the Owner specified full-access launch for new herdr Workers, retain that scoped policy, discover the actual mode parameters through current herdr/CLI help, and follow transports.md's verification procedure rather than repeatedly requesting the same launch authorization. No such policy means normal defaults, not inferred bypass. Record effective mode separately from task approvals and execution bounds. Never substitute subagents for independent sessions.
 5. Skill refresh: when the Owner says the skill was upgraded, re-invoke the skill as Leader keeping mission, roster and epoch, send one `SKILL_REFRESH` (with `REF:<commit>` for a project install) to each ACTIVE Worker, record `SKILL_REFRESH_ACK`s. Never install the skill yourself.
 6. Leaving: on `LEAVE_REQUEST` reply `LEAVE_ACK`, mark `LEFT`, record the handoff ref, re-plan its packages. To retire a Worker send `RELEASE`. Never send `ASSIGN`, `SKILL_REFRESH` or peer introductions to a `LEFT` or `LOST` Worker; it must `JOIN_REQUEST` again to return.
 7. End the turn with a concise status.
