@@ -8,6 +8,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { createLedgerReader } from './team-ledger.mjs';
+import { parseHerdrCommand, parseHerdrResult, createHerdrObserver } from './team-herdr.mjs';
 
 const STALE_MS = 30 * 60 * 1000;
 const clip = (s, n) => {
@@ -44,13 +45,28 @@ export function parseEnvelope(text) {
     : null;
 }
 
-// Normalised events: {ts, kind: text|tool_call|tool_result|turn_start|turn_end|send|recv, ...}
+const metadataText = (value) => typeof value === 'string' && value.trim() ? value.trim().slice(0, 160) : null;
+function herdrAttempts(ts, callId, command) {
+  return parseHerdrCommand(command).map((m) => ({ ts, kind: 'send', callId, transport: 'herdr', to: m.to, body: m.body }));
+}
+function claudeHerdrAttempts(ts, block) {
+  if (block.name === 'Bash') return herdrAttempts(ts, block.id, block.input?.command);
+  if (block.name === 'multi_tool_use.parallel') return (block.input?.tool_uses || []).flatMap((tool) =>
+    tool.recipient_name === 'functions.Bash' ? herdrAttempts(ts, block.id, tool.parameters?.command) : []);
+  return [];
+}
+// Normalised events: {ts, kind: metadata|text|tool_call|tool_result|turn_start|turn_end|send|recv, ...}
 export function parseClaudeLine(d, ctx) {
   const ev = [];
   if (d.isSidechain) return ev;
   if (d.sessionId && !ctx.session) ctx.session = d.sessionId;
   if (d.cwd) ctx.cwd = d.cwd;
   const ts = Date.parse(d.timestamp) || 0;
+  if (d.type === 'assistant') {
+    const model = metadataText(d.message?.model);
+    const effort = metadataText(d.message?.output_config?.effort);
+    if (model || effort) ev.push({ ts, kind: 'metadata', model, effort });
+  }
   const queued = d.type === 'attachment' && d.attachment?.type === 'queued_command';
   const c = queued ? d.attachment.prompt : d.message?.content;
   const blocks = typeof c === 'string' ? [{ type: 'text', text: c }] : Array.isArray(c) ? c : [];
@@ -60,9 +76,10 @@ export function parseClaudeLine(d, ctx) {
       else if (b.type === 'tool_use') {
         ev.push({ ts, kind: 'tool_call', callId: b.id, name: b.name, input: b.input });
         if (b.name === 'SendMessage') ev.push({ ts, kind: 'send', to: b.input?.to, body: b.input?.message });
+        ev.push(...claudeHerdrAttempts(ts, b));
       }
     } else if (d.type === 'user' || queued) {
-      if (b.type === 'tool_result') ev.push({ ts, kind: 'tool_result', callId: b.tool_use_id });
+      if (b.type === 'tool_result') ev.push({ ts, kind: 'tool_result', callId: b.tool_use_id, content: b.content, isError: b.is_error === true });
       else if (b.type === 'text') {
         ev.push({ ts, kind: 'text', role: 'user', text: b.text });
         // Claude 2.1.296 delivers queued attachments or user text with this fixed prefix.
@@ -81,6 +98,10 @@ export function parseCodexLine(d, ctx) {
   if (d.type === 'session_meta') {
     if (p.id) ctx.session = p.id;
     if (p.cwd) ctx.cwd = p.cwd;
+  } else if (d.type === 'turn_context') {
+    const model = metadataText(p.model);
+    const effort = metadataText(p.effort ?? p.reasoning_effort);
+    ev.push({ ts, kind: 'metadata', model, effort, reset: true });
   } else if (d.type === 'response_item') {
     if (p.type === 'message' && (p.role === 'assistant' || p.role === 'user')) {
       const text = (p.content || []).map((x) => x.text || '').join('');
@@ -88,13 +109,14 @@ export function parseCodexLine(d, ctx) {
     } else if (p.type === 'function_call') {
       const input = safeJSON(p.arguments);
       ev.push({ ts, kind: 'tool_call', callId: p.call_id, name: p.name, input });
+      if (/^(?:functions[.__])?exec_command$/.test(p.name || '')) ev.push(...herdrAttempts(ts, p.call_id, input?.cmd));
       if (/(?:^|\.|__)send_message_to_thread$/.test(p.name || '')) {
         ev.push({ ts, kind: 'send', to: input?.threadId, body: input?.prompt });
       }
     } else if (p.type === 'custom_tool_call') {
       ev.push({ ts, kind: 'tool_call', callId: p.call_id, name: p.name, input: { command: p.input } });
     } else if (p.type === 'function_call_output' || p.type === 'custom_tool_call_output') {
-      ev.push({ ts, kind: 'tool_result', callId: p.call_id });
+      ev.push({ ts, kind: 'tool_result', callId: p.call_id, content: p.output, isError: false });
     }
   } else if (d.type === 'event_msg') {
     if (p.type === 'task_started') ev.push({ ts, kind: 'turn_start' });
@@ -113,6 +135,14 @@ function newRec(file, client) {
 
 function ingest(rec, ev) {
   const s = rec.s;
+  if (ev.kind === 'metadata') {
+    if (!s.metadata || ev.ts >= s.metadata.ts) {
+      const previous = s.metadata || {};
+      s.metadata = { ts: ev.ts, model: ev.model || (ev.reset ? null : previous.model) || null,
+        effort: ev.effort || (ev.reset || (ev.model && ev.model !== previous.model) ? null : previous.effort) || null };
+    }
+    return;
+  }
   if (ev.ts > s.lastTs) s.lastTs = ev.ts;
   switch (ev.kind) {
     case 'tool_call': {
@@ -123,7 +153,19 @@ function ingest(rec, ev) {
       s.last = 'tool';
       break;
     }
-    case 'tool_result': s.pending.delete(ev.callId); s.last = 'result'; break;
+    case 'tool_result': {
+      s.pending.delete(ev.callId); s.last = 'result';
+      const attempts = rec.sent.filter((m) => m.transport === 'herdr' && m.callId === ev.callId);
+      if (attempts.length) {
+        const result = parseHerdrResult(ev.content, ev.isError);
+        for (const message of attempts) {
+          const matches = result.agents.filter((a) => a.name === message.toRaw);
+          message.delivery = result.delivery === 'accepted' && matches.length !== 1 ? 'unknown' : result.delivery;
+          if (message.delivery === 'accepted') message.toSession = `${matches[0].client}:${matches[0].session}`;
+        }
+      }
+      break;
+    }
     case 'turn_start': s.turnActive = true; s.last = 'busy'; break;
     case 'turn_end': s.turnActive = false; s.pending.clear(); s.last = 'idle'; break;
     case 'text':
@@ -132,7 +174,7 @@ function ingest(rec, ev) {
       break;
     case 'send': {
       const env = parseEnvelope(ev.body);
-      if (env) rec.sent.push({ ...env, ts: ev.ts, toRaw: ev.to });
+      if (env) rec.sent.push({ ...env, ts: ev.ts, toRaw: ev.to, ...(ev.transport === 'herdr' ? { transport: 'herdr', delivery: 'pending', callId: ev.callId } : {}) });
       break;
     }
     case 'recv': {
@@ -173,7 +215,7 @@ const SENDER_STATE = {
   REVIEW_VERDICT: 'REVIEWED', COMPLETE: 'COMPLETE', LEAVE_REQUEST: 'LEAVING',
 };
 const RECEIVER_STATE = {
-  JOIN_ACK: 'JOINING', ASSIGN: 'ASSIGNED', LEAVE_ACK: 'LEFT', RELEASE: 'LEAVING', REVIEW_REQUEST: 'IN_REVIEW', REVIEW_FEEDBACK: 'IN_REVIEW', REVIEW_RESULT: 'IN_REVIEW',
+  JOIN_ACK: 'JOINING', ASSIGN: 'ASSIGNED', RELEASE: 'LEAVING', REVIEW_REQUEST: 'IN_REVIEW', REVIEW_FEEDBACK: 'IN_REVIEW', REVIEW_RESULT: 'IN_REVIEW',
 };
 
 function roleOf({ sentT, recvT }) {
@@ -183,7 +225,10 @@ function roleOf({ sentT, recvT }) {
   return 'Worker';
 }
 
-export function aggregate(recs, project, now) {
+export function aggregate(recs, project, now, { cutoff = -Infinity, snapshot = null } = {}) {
+  const inWindow = (m) => m.ts >= cutoff && m.ts <= now;
+  const effective = (m) => m.transport !== 'herdr' || m.delivery === 'accepted';
+  const observed = new Set();
   const info = new Map();
   const member = (r) => {
     if (!info.has(r.key)) info.set(r.key, { r, sentT: new Set(), recvT: new Set(), name: null });
@@ -196,16 +241,25 @@ export function aggregate(recs, project, now) {
     r.key = `${r.client}:${r.ctx.session || r.base}`;
     for (const m of r.sent) {
       if (m.project !== project) continue;
-      const mi = member(r);
-      mi.sentT.add(m.type);
-      if (m.from && !mi.name) mi.name = m.from;
+      if (effective(m)) {
+        const mi = member(r);
+        mi.sentT.add(m.type);
+        if (m.from) mi.name = m.from;
+        if (inWindow(m)) { observed.add(r.key); if (m.toSession) observed.add(m.toSession); }
+      }
       sent.set(m.id ?? `${r.key}#${m.ts}#${anon++}`, { ...m, fromSession: r.key });
     }
     for (const m of r.recvd) {
       if (m.project !== project) continue;
       member(r).recvT.add(m.type);
+      if (inWindow(m)) observed.add(r.key);
       recvAll.push({ m, key: r.key });
     }
+  }
+  for (const message of sent.values()) {
+    if (!effective(message) || !message.toSession) continue;
+    const record = recs.find((r) => r.key === message.toSession);
+    if (record) member(record).recvT.add(message.type);
   }
   // Resumed sessions can span files; keep all messages and the most recent execution state.
   for (const r of recs) {
@@ -219,7 +273,7 @@ export function aggregate(recs, project, now) {
     else sent.set(m.id ?? `${key}#${m.ts}#${anon++}`, { ...m, fromSession: null, toSession: key });
   }
   const byName = new Map();
-  for (const [k, mi] of info) if (mi.name) byName.set(mi.name, k);
+  for (const [k, mi] of info) if (mi.name) byName.set(mi.name, byName.has(mi.name) ? null : k);
   const stripRef = (s) => String(s ?? '').replace(/\s*\[[^\]]*\]\s*$/, '');
   const resolveTo = (msg) => {
     const target = `codex:${msg.toRaw}`;
@@ -237,37 +291,56 @@ export function aggregate(recs, project, now) {
   for (const [key, mi] of info) {
     const role = roleOf(mi);
     const { s } = mi.r;
-    const lastTs = s.lastTs || mi.r.mtime || 0;
+    const lastTs = s.lastTs || 0;
     const pend = [...s.pending.values()].pop();
-    let exec = 'IDLE', tool = '';
-    if (now - lastTs > STALE_MS) exec = 'STALE';
+    let exec = 'UNKNOWN', tool = '';
+    if (lastTs && now - lastTs > STALE_MS) exec = 'STALE';
     else if (pend) { exec = 'RUNNING'; tool = `${pend.name}: ${pend.summary}`; }
-    else if (s.last === 'busy' || s.last === 'result') exec = 'RUNNING';
+    else if (s.turnActive === true) exec = 'RUNNING';
+    else if (s.turnActive === false || (mi.r.client === 'codex' && s.last === 'idle')) exec = 'IDLE';
+    const matches = snapshot?.status === 'ok' && now >= snapshot.observedAt && now - snapshot.observedAt <= 10000 ? snapshot.agents.filter((a) => `${a.client}:${a.session}` === key) : [];
+    const live = matches.length === 1 ? matches[0] : null;
+    const runtimeExec = live && ({ working: 'RUNNING', idle: 'IDLE', done: 'IDLE', blocked: 'BLOCKED' })[live.status];
+    if (runtimeExec) { exec = runtimeExec; if (exec !== 'RUNNING') tool = ''; }
+    const metadata = recs.filter((r) => r.key === key && r.s.metadata)
+      .map((r) => r.s.metadata).sort((a, b) => b.ts - a.ts)[0];
     out.set(key, {
       id: key, short: key.split(':')[1].slice(0, 6), client: mi.r.client, cwd: mi.r.ctx.cwd || '',
-      workerId: mi.name, name: mi.name || (role === 'Leader' ? 'leader' : key.split(':')[1].slice(0, 6)), role,
-      proto: role === 'Leader' ? 'COORDINATING' : 'NONE', exec, tool, lastText: s.lastText,
+      workerId: mi.name, name: live?.name || mi.name || (role === 'Leader' ? 'leader' : key.split(':')[1].slice(0, 6)), role,
+      execSource: runtimeExec ? 'herdr-observed' : 'transcript-inferred', execObservedAt: runtimeExec ? snapshot.observedAt : lastTs || null,
+      proto: role === 'Leader' ? 'COORDINATING' : 'NONE', membership: 'ACTIVE', exec, tool, lastText: s.lastText,
       recentTools: s.tools.map((t) => clip(`${t.name}: ${t.summary}`, 80)), lastTs,
+      model: metadata?.model || null, effort: metadata?.effort || null, modelObservedAt: metadata?.ts || null,
     });
   }
   const label = (k, fallback) => out.get(k)?.name || fallback || null;
   const messages = msgs.map((m) => {
-    if (out.has(m.fromSession)) { const st = SENDER_STATE[m.type]; if (st) out.get(m.fromSession).proto = st; }
-    if (out.has(m.toSession)) { const st = RECEIVER_STATE[m.type]; if (st) out.get(m.toSession).proto = st; }
+    const sender = out.get(m.fromSession), receiver = out.get(m.toSession);
+    if (effective(m) && m.type === 'JOIN_REQUEST' && sender) sender.membership = 'ACTIVE';
+    if (effective(m) && m.type === 'LEAVE_ACK') {
+      const request = m.re ? sent.get(m.re) : null;
+      const leaving = request?.type === 'RELEASE' ? sender : request?.type === 'LEAVE_REQUEST' ? receiver
+        : sender?.role === 'Leader' ? receiver : receiver?.role === 'Leader' ? sender : null;
+      if (leaving) { leaving.membership = 'LEFT'; leaving.proto = 'LEFT'; }
+    }
+    if (effective(m) && sender && sender.membership !== 'LEFT') { const st = SENDER_STATE[m.type]; if (st) sender.proto = st; }
+    if (effective(m) && receiver && receiver.membership !== 'LEFT') { const st = RECEIVER_STATE[m.type]; if (st) receiver.proto = st; }
     const leaderEnd = [m.fromSession, m.toSession].some((k) => out.get(k)?.role === 'Leader');
     return {
       ts: m.ts, type: m.type, id: m.id, re: m.re, status: m.status, ref: m.ref,
+      transport: m.transport || 'native', delivery: m.transport === 'herdr' ? m.delivery : 'observed',
       from: m.fromSession, to: m.toSession,
       fromLabel: label(m.fromSession, m.from || m.fromRaw), toLabel: label(m.toSession, m.to || stripRef(m.toRaw)),
       p2p: !!(out.has(m.fromSession) && out.has(m.toSession) && !leaderEnd),
     };
   });
-  return { project, now, sessions: [...out.values()], messages: messages.slice(-300) };
+  return { project, now, sessions: [...out.values()].filter((s) => observed.has(s.id)), messages: messages.filter(inWindow).slice(-300) };
 }
 
-export function createTracker({ project, claudeDir, codexDir, sinceMs = 24 * 3600e3, now = Date.now, ledgerRepo, ledgerDir }) {
+export function createTracker({ project, claudeDir, codexDir, sinceMs = 24 * 3600e3, now = Date.now, ledgerRepo, ledgerDir, herdrObserver = createHerdrObserver({ now }) }) {
   const files = new Map();
-  const ledger = createLedgerReader({ project, ...(ledgerRepo !== undefined ? { ledgerRepo } : {}), ...(ledgerDir !== undefined ? { ledgerDir } : {}) });
+  if (ledgerDir !== undefined && !project) throw new Error('--ledger-dir requires --project to bind the directory to one team');
+  if (ledgerDir !== undefined && ledgerRepo !== undefined) throw new Error('--ledger-dir and --ledger-repo are mutually exclusive');
   const walk = (dir, client, match) => {
     try { return fs.readdirSync(dir, { recursive: true }).map(String).filter(match).map((f) => ({ file: path.join(dir, f), client })); }
     catch { return []; }
@@ -284,7 +357,7 @@ export function createTracker({ project, claudeDir, codexDir, sinceMs = 24 * 360
     return found;
   };
   return {
-    state() {
+    state(selectedProject) {
       const t = now();
       const live = new Set();
       for (const { file, client } of discover()) {
@@ -298,8 +371,21 @@ export function createTracker({ project, claudeDir, codexDir, sinceMs = 24 * 360
         if (st.size > rec.offset) readNew(rec, st.size);
       }
       for (const f of files.keys()) if (!live.has(f)) files.delete(f);
-      const state = aggregate([...files.values()], project, t);
-      return { ...state, ledger: ledger.read(state.sessions, t) };
+      const records = [...files.values()], projects = new Map();
+      for (const rec of records) for (const message of [...rec.sent, ...rec.recvd]) {
+        if (message.ts < t - sinceMs || message.ts > t || (message.transport === 'herdr' && message.delivery !== 'accepted')) continue;
+        projects.set(message.project, Math.max(projects.get(message.project) || 0, message.ts || 0));
+      }
+      const availableProjects = [...projects].map(([project, lastActivity]) => ({ project, lastActivity }))
+        .sort((a, b) => b.lastActivity - a.lastActivity || a.project.localeCompare(b.project));
+      const chosen = selectedProject ?? project ?? availableProjects[0]?.project ?? null;
+      const snapshot = herdrObserver.snapshot();
+      const state = chosen ? aggregate(records, chosen, t, { cutoff: t - sinceMs, snapshot }) : { project: null, now: t, sessions: [], messages: [] };
+      const unavailable = (error) => ({ status: 'unavailable', tasks: [], diagnostics: [], error });
+      const ledger = !chosen ? unavailable('请选择团队') : ledgerDir !== undefined && chosen !== project
+        ? unavailable('目录账本仅绑定团队 ' + project)
+        : createLedgerReader({ project: chosen, ...(ledgerRepo !== undefined ? { ledgerRepo } : {}), ...(ledgerDir !== undefined ? { ledgerDir } : {}) }).read(state.sessions, t);
+      return { ...state, availableProjects, ledger, observation: { source: 'herdr', status: snapshot.status, observedAt: snapshot.observedAt, error: snapshot.error || null } };
     },
   };
 }
@@ -314,8 +400,13 @@ export function createServer(tracker) {
     }
     const url = new URL(req.url, 'http://x');
     if (url.pathname === '/api/state') {
+      const selectedProject = url.searchParams.has('project') ? url.searchParams.get('project') : undefined;
+      if (selectedProject !== undefined && (!selectedProject || selectedProject.length > 200 || /[\u0000-\u001f\u007f]/.test(selectedProject))) {
+        res.writeHead(400, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ error: 'Invalid team name' }));
+        return;
+      }
       try {
-        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(tracker.state()));
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(tracker.state(selectedProject)));
       } catch (e) {
         res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ error: String(e.message) }));
       }
@@ -346,8 +437,8 @@ function main() {
   const a = { port: '4317', since: '24h' };
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i += 2) a[argv[i].replace(/^--/, '')] = argv[i + 1];
-  if (!a.project) {
-    console.error('Usage: node team-dashboard.mjs --project <id> [--port 4317] [--since 24h] [--claude-dir DIR] [--codex-dir DIR] [--ledger-repo DIR | --ledger-dir DIR]');
+  if (a['ledger-dir'] !== undefined && !a.project) {
+    console.error('--ledger-dir requires --project to bind the directory to one team');
     process.exit(2);
   }
   const tracker = createTracker({
@@ -360,7 +451,7 @@ function main() {
   const server = createServer(tracker);
   server.on('error', (e) => { console.error(`dashboard: ${e.message}`); process.exit(1); });
   server.listen(Number(a.port), '127.0.0.1', () => {
-    console.log(`Agent Team Dashboard for project "${a.project}": http://127.0.0.1:${server.address().port}/  (add ?demo=1 for a scripted demo)`);
+    console.log(`Agent Team Dashboard (${a.project ? `default team "${a.project}"` : 'select a team in the dashboard'}): http://127.0.0.1:${server.address().port}/  (add ?demo=1 for a scripted demo)`);
   });
 }
 
@@ -393,17 +484,22 @@ const HTML = String.raw`
 @media(prefers-color-scheme:dark){.cli-icon{background:#2a2f36;color:#dbe4ee;border-color:#5b6675}.cli-icon.claude{background:#422e25;color:#efc7ae;border-color:#9b735b}.cli-icon.codex{background:#263441;color:#c4d8ea;border-color:#637c94}}
 @media(max-width:1000px){.collaboration-layout{grid-template-columns:minmax(0,1fr)}.ledger-panel{position:static;max-height:500px;margin-bottom:22px}.ledger-toolbar select{width:140px}}
 @media(max-width:600px){.live-seat .cli-icon{width:26px;height:27px;border-radius:6px}.cli-icon b{font-size:11px}.cli-icon .terminal-bar{font-size:5px;left:3px;line-height:7px}.ledger-panel{padding:12px}.collaboration-layout{gap:8px}}
+.live-seat .seat-tags{display:flex;align-items:center;gap:4px;min-width:0}.node-model{min-width:0;overflow:hidden;text-overflow:ellipsis}.node-effort{flex:none;padding:0 3px;border:1px solid var(--line);border-radius:3px;font-size:8px;line-height:1.5;color:var(--ink)}
+.team-picker{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)}.team-picker select{min-height:32px;max-width:min(300px,60vw);border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:3px 8px;font-size:12px}
+
+.collaboration-layout{grid-template-columns:minmax(0,1fr) minmax(420px,.75fr)}.ledger-tasks{display:flex;gap:10px;overflow-x:auto;align-items:stretch;padding-bottom:10px;scroll-snap-type:x proximity}.kanban-column{flex:0 0 205px;background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:9px;min-height:200px;scroll-snap-align:start}.kanban-column h3{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 2px 10px;color:var(--ink);font-size:11px}.kanban-column h3 b{font-size:10px;min-width:20px;text-align:center;background:var(--panel);border-radius:4px;border:1px solid var(--line)}.kanban-cards{display:grid;gap:8px}.kanban-cards .ledger-task{width:100%;background:var(--panel);box-shadow:var(--shadow)}.kanban-empty{font-size:10px;color:var(--muted);padding:15px 0;text-align:center}.kanban-column[data-column="ASSIGNED"] h3{color:var(--accent)}.kanban-column[data-column="PAUSED"] h3{color:var(--warn)}.kanban-column[data-column="DONE"] h3{color:var(--good)}
+@media(max-width:1100px){.collaboration-layout{grid-template-columns:minmax(0,1fr)}.ledger-panel{position:static;max-height:none;margin-bottom:22px}}@media(max-width:600px){.kanban-column{flex-basis:190px}}
 </style></head><body>
 <main class="main" id="overview">
-<header class="app-header"><div class="app-brand"><span class="brand-icon" aria-hidden="true">✦</span><div><h1>Agents <span class="sub">团队协作</span></h1><p class="sub"><span id="project">正在读取…</span> <span class="badge" id="sourceBadge">本地 · 只读</span></p></div></div><div class="top-actions"><span id="connection" class="connection" role="status">正在连接</span><button id="motionToggle" type="button" aria-pressed="true">暂停动画</button><button id="pause" type="button" aria-pressed="false">暂停刷新</button><button id="refresh" type="button">↻ 立即刷新</button></div></header>
-<div class="summary-bar"><section class="stats" aria-label="成员状态筛选"><button class="stat" data-scope="all" aria-pressed="true"><strong id="total">—</strong>位成员</button><button class="stat" data-scope="running" aria-pressed="false"><strong id="running">—</strong>执行中</button><button class="stat" data-scope="blocked" aria-pressed="false"><strong id="blocked">—</strong>协作阻塞</button><button class="stat" data-scope="stale" aria-pressed="false"><strong id="stale">—</strong>久未活动</button></section><div class="summary-info"><span id="updated">等待首次数据</span><a href="#messages">查看通信记录 ↓</a></div></div>
+<header class="app-header"><div class="app-brand"><span class="brand-icon" aria-hidden="true">✦</span><div><h1>Agents <span class="sub">团队协作</span></h1><p class="sub"><label class="team-picker">Team <select id="teamFilter" aria-label="选择团队"><option value="">正在发现团队…</option></select></label> <span id="project" hidden>正在读取…</span> <span class="badge" id="sourceBadge">本地 · 只读</span></p></div></div><div class="top-actions"><span id="connection" class="connection" role="status">正在连接</span><button id="motionToggle" type="button" aria-pressed="true">暂停动画</button><button id="pause" type="button" aria-pressed="false">暂停刷新</button><button id="refresh" type="button">↻ 立即刷新</button></div></header>
+<div class="summary-bar"><section class="stats" aria-label="成员状态筛选"><button class="stat" data-scope="all" aria-pressed="true"><strong id="total">—</strong>位成员</button><button class="stat" data-scope="running" aria-pressed="false"><strong id="running">—</strong>执行中</button><button class="stat" data-scope="blocked" aria-pressed="false"><strong id="blocked">—</strong>协作阻塞</button><button class="stat" data-scope="stale" aria-pressed="false"><strong id="stale">—</strong>久未活动</button></section><div class="summary-info"><span id="observerStatus">日志观测</span><span id="updated">等待首次数据</span><a href="#messages">查看通信记录 ↓</a></div></div>
 <div id="error" class="notice" role="alert" hidden></div>
-<div class="collaboration-layout"><section class="live-section" aria-labelledby="liveTitle"><div class="graph-intro"><h2 id="liveTitle">成员协作图 · 拖动调整位置</h2><span><button type="button" id="fitGraph">适配全员</button> <button type="button" id="relayoutGraph">重新布局</button></span></div><div class="graph-legend" aria-label="连线类型与最近消息状态图例"><span><i style="--edge-color:var(--type-assign)"></i>协调 / 分配</span><span><i style="--edge-color:var(--type-peer)"></i>成员协作</span><span><i style="--edge-color:var(--type-review)"></i>审查</span><span><i style="--edge-color:var(--type-other)"></i>其他</span><span><b class="legend-dot"></b>! 最近阻塞 · 虚线</span><span><b class="legend-dot complete"></b>✓ 最近完成 · 点线</span></div><div class="live-room" id="liveRoom"><div class="live-scroll" id="liveScroll" tabindex="0" role="region" aria-label="全员通信概览"><div class="graph-canvas" id="graphCanvas"><div id="graphWorld"><svg class="graph-lines" id="graphLines" role="group" aria-label="成员通信连线，可聚焦查看类型与状态"></svg><div class="live-grid" id="liveGrid"></div><svg class="mail-layer" id="mailLayer" aria-hidden="true"></svg></div></div><p class="empty" id="liveEmpty">等待小伙伴加入…</p></div><div class="live-foot"><span id="graphSummary">正在读取通信联系…</span><span id="liveCaption">成员动作映射当前活动 · 信封只播放新增消息</span></div></div></section><aside class="ledger-panel" aria-labelledby="ledgerTitle"><div class="ledger-heading"><div><h2 id="ledgerTitle">任务账本</h2><p class="sub">任务状态以账本为准</p></div><span class="badge">只读</span></div><p id="ledgerSource" class="ledger-source">正在读取账本来源…</p><p id="ledgerNotice" class="ledger-notice"></p><div class="ledger-toolbar"><label class="field">筛选任务<input id="ledgerSearch" type="search" placeholder="任务 ID、标题或 Owner" autocomplete="off"></label><label class="field">状态<select id="ledgerStatus"><option value="">全部状态</option></select></label></div><div class="ledger-selection" id="ledgerSelection" hidden><span id="ledgerSelectionText"></span><button type="button" id="clearLedgerSelection">清除</button></div><div id="ledgerTasks" class="ledger-tasks"></div><p id="ledgerEmpty" class="empty">等待账本数据</p><div id="ledgerTaskDetail" class="ledger-task-detail" hidden></div></aside></div>
+<div class="collaboration-layout"><section class="live-section" aria-labelledby="liveTitle"><div class="graph-intro"><h2 id="liveTitle">成员协作图 · 拖动调整位置</h2><span><button type="button" id="clearGraphFocus">取消聚焦</button> <button type="button" id="fitGraph">适配全员</button> <button type="button" id="relayoutGraph">重新布局</button></span></div><div class="graph-legend" aria-label="连线类型与最近消息状态图例"><span><i style="--edge-color:var(--type-assign)"></i>协调 / 分配</span><span><i style="--edge-color:var(--type-peer)"></i>成员协作</span><span><i style="--edge-color:var(--type-review)"></i>审查</span><span><i style="--edge-color:var(--type-other)"></i>其他</span><span><b class="legend-dot"></b>! 最近阻塞 · 虚线</span><span><b class="legend-dot complete"></b>✓ 最近完成 · 点线</span></div><div class="live-room" id="liveRoom"><div class="live-scroll" id="liveScroll" tabindex="0" role="region" aria-label="全员通信概览"><div class="graph-canvas" id="graphCanvas"><div id="graphWorld"><svg class="graph-lines" id="graphLines" role="group" aria-label="成员通信连线，可聚焦查看类型与状态"></svg><div class="live-grid" id="liveGrid"></div><svg class="mail-layer" id="mailLayer" aria-hidden="true"></svg></div></div><p class="empty" id="liveEmpty">等待小伙伴加入…</p></div><div class="live-foot"><span id="graphSummary">正在读取通信联系…</span><span id="liveCaption">成员动作映射当前活动 · 信封只播放新增消息</span></div></div></section><aside class="ledger-panel" aria-labelledby="ledgerTitle"><div class="ledger-heading"><div><h2 id="ledgerTitle">任务看板</h2><p class="sub">任务状态以账本为准</p></div><span class="badge">只读</span></div><p id="ledgerSource" class="ledger-source">正在读取账本来源…</p><p id="ledgerNotice" class="ledger-notice"></p><div class="ledger-toolbar"><label class="field">筛选任务<input id="ledgerSearch" type="search" placeholder="任务 ID、标题或 Owner" autocomplete="off"></label><label class="field">状态<select id="ledgerStatus"><option value="">全部状态</option></select></label></div><div class="ledger-selection" id="ledgerSelection" hidden><span id="ledgerSelectionText"></span><button type="button" id="clearLedgerSelection">清除</button></div><div id="ledgerTasks" class="ledger-tasks"></div><p id="ledgerEmpty" class="empty">等待账本数据</p><div id="ledgerTaskDetail" class="ledger-task-detail" hidden></div></aside></div>
 <div class="workspace"><section id="members" aria-labelledby="membersTitle"><div class="section-head"><h2 id="membersTitle" tabindex="-1">团队成员<span class="count" id="memberCount"></span></h2><button type="button" id="clearScope" class="text-button" hidden>显示全部成员</button></div><div class="panel member-list-wrap"><div class="member-list"><div class="members-head"><span>成员 / 角色</span><span>执行活动</span><span>协议阶段</span><span>最近活动</span></div><div id="memberRows"></div><div class="empty" id="membersEmpty">正在读取团队活动…</div></div></div></section><aside class="aside"><section aria-labelledby="attentionTitle"><div class="section-head"><h2 id="attentionTitle">待关注</h2><span class="badge" id="attentionCount">—</span></div><div class="panel"><div class="attention-head"><span>当前状态提醒</span><span aria-hidden="true">◷</span></div><div class="attention-list" id="attention"></div><p class="empty" id="attentionEmpty">等待首次数据</p></div></section><section class="guide"><h3>如何理解这些状态？</h3><p><strong>执行活动</strong>来自工具与输出记录；<strong>协议阶段</strong>来自最近协作消息，二者独立。</p><p>“已完成”后仍可能执行工具。“久未活动”不能区分会话关闭和空闲。</p><p>角色根据通信推断；Leader 标签不代表唯一现任负责人。</p></section></aside></div>
-<section class="messages" id="messages" aria-labelledby="messagesTitle"><div class="section-head"><div class="message-title"><h2 id="messagesTitle" tabindex="-1">通信记录</h2><span class="badge">原生协议消息</span></div><span class="sub" id="retained"></span></div><div class="panel"><div class="filters"><label class="field search">搜索记录<input type="search" id="search" placeholder="搜索成员、消息 ID、类型或引用…" autocomplete="off"></label><label class="field">消息类型<select id="typeFilter"><option value="">全部类型</option></select></label><label class="field">相关成员<select id="memberFilter"><option value="">全部成员</option></select></label><button type="button" id="clearFilters">清除</button></div><div class="tablewrap" tabindex="0" role="region" aria-label="消息记录，可横向滚动"><table><thead><tr><th scope="col">时间</th><th scope="col">发送 → 接收</th><th scope="col">消息类型</th><th scope="col">消息 ID</th><th scope="col">回复 RE</th><th scope="col">状态 / 引用</th></tr></thead><tbody id="msgs"><tr><td colspan="6" class="empty">正在读取通信记录…</td></tr></tbody></table></div><div class="table-foot"><span id="resultCount">等待首次数据</span><span>仅保留最近 300 条 · 最多显示 100 条匹配记录</span></div></div></section>
-<footer class="footer"><span>基于本机 session transcripts 推断 · 不包含 herdr 与其他机器上的通信</span><span>Agent Team Bootstrap / Local Dashboard</span></footer>
+<section class="messages" id="messages" aria-labelledby="messagesTitle"><div class="section-head"><div class="message-title"><h2 id="messagesTitle" tabindex="-1">通信记录</h2><span class="badge">协议调用观测</span></div><span class="sub" id="retained"></span></div><div class="panel"><div class="filters"><label class="field search">搜索记录<input type="search" id="search" placeholder="搜索成员、消息 ID、类型或引用…" autocomplete="off"></label><label class="field">消息类型<select id="typeFilter"><option value="">全部类型</option></select></label><label class="field">相关成员<select id="memberFilter"><option value="">全部成员</option></select></label><button type="button" id="clearFilters">清除</button></div><div class="tablewrap" tabindex="0" role="region" aria-label="消息记录，可横向滚动"><table><thead><tr><th scope="col">时间</th><th scope="col">发送 → 接收</th><th scope="col">消息类型</th><th scope="col">消息 ID</th><th scope="col">回复 RE</th><th scope="col">状态 / 引用</th></tr></thead><tbody id="msgs"><tr><td colspan="6" class="empty">正在读取通信记录…</td></tr></tbody></table></div><div class="table-foot"><span id="resultCount">等待首次数据</span><span>仅保留最近 300 条 · 最多显示 100 条匹配记录</span></div></div></section>
+<footer class="footer"><span>本机日志与 herdr 只读观测 · 不包含远端机器 · 发送接受不等于业务完成</span><span>Agent Team Bootstrap / Local Dashboard</span></footer>
 </main>
-<dialog id="detail" aria-labelledby="detailTitle"><div class="drawer-top"><p>成员详情 / SESSION DETAILS</p><button type="button" id="closeDetail" aria-label="关闭成员详情" autofocus>×</button></div><div class="drawer-content"><div class="drawer-identity"><div id="detailAvatar"></div><div><h2 id="detailTitle"></h2><div id="detailTags"></div></div></div><p id="missing" class="notice" hidden>该会话已不在当前数据范围。</p><div id="detailData"><div class="drawer-status"><div><h3>执行活动</h3><div id="detailExec"></div></div><div><h3>协议阶段</h3><div id="detailProto"></div></div></div><h3>当前工具 / 执行活动</h3><div id="detailTool" class="detail-box mono"></div><h3>最近输出</h3><div id="detailText" class="detail-box"></div><h3>会话信息</h3><dl><dt>Session</dt><dd id="detailId" class="mono"></dd><dt>工作目录</dt><dd id="detailCwd" class="mono"></dd><dt>最后活动</dt><dd id="detailTime"></dd></dl><h3>近期工具</h3><ul id="detailTools" class="tools"></ul><h3>关联账本任务</h3><div id="detailTasks" class="detail-tasks"></div><h3>通信对象 <span class="muted">· 当前消息窗口内</span></h3><div id="detailPeers" class="peers"></div><h3>最近相关消息</h3><div id="detailMessages"></div></div><button type="button" class="primary" id="viewMessages">查看该成员的通信记录 →</button></div></dialog>
+<dialog id="detail" aria-labelledby="detailTitle"><div class="drawer-top"><p>成员详情 / SESSION DETAILS</p><button type="button" id="closeDetail" aria-label="关闭成员详情" autofocus>×</button></div><div class="drawer-content"><div class="drawer-identity"><div id="detailAvatar"></div><div><h2 id="detailTitle"></h2><div id="detailTags"></div></div></div><p id="missing" class="notice" hidden>该会话已不在当前数据范围。</p><div id="detailData"><div class="drawer-status"><div><h3>执行活动</h3><div id="detailExec"></div></div><div><h3>协议阶段</h3><div id="detailProto"></div></div></div><h3>当前工具 / 执行活动</h3><div id="detailTool" class="detail-box mono"></div><h3>最近输出</h3><div id="detailText" class="detail-box"></div><h3>会话信息</h3><dl><dt>执行来源</dt><dd id="detailExecSource"></dd><dt>状态观测</dt><dd id="detailExecTime"></dd><dt>模型</dt><dd id="detailModel" class="mono"></dd><dt>思考强度</dt><dd id="detailEffort"></dd><dt>观测时间</dt><dd id="detailModelTime"></dd><dt>Session</dt><dd id="detailId" class="mono"></dd><dt>工作目录</dt><dd id="detailCwd" class="mono"></dd><dt>最后活动</dt><dd id="detailTime"></dd></dl><h3>近期工具</h3><ul id="detailTools" class="tools"></ul><h3>关联账本任务</h3><div id="detailTasks" class="detail-tasks"></div><h3>通信对象 <span class="muted">· 当前消息窗口内</span></h3><div id="detailPeers" class="peers"></div><h3>最近相关消息</h3><div id="detailMessages"></div></div><button type="button" class="primary" id="viewMessages">查看该成员的通信记录 →</button></div></dialog>
 <script src="/vendor/d3-7.9.0.min.js"></script>
 <script>
 (function(){
@@ -413,22 +509,25 @@ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return
 function hms(t){return new Date(t).toLocaleTimeString('zh-CN',{hour12:false})}
 function ago(ms){var s=Math.max(0,Math.floor(ms/1000));return s<60?s+' 秒前':s<3600?Math.floor(s/60)+' 分钟前':s<86400?Math.floor(s/3600)+' 小时前':Math.floor(s/86400)+' 天前'}
 function hash(str){var h=0;for(var i=0;i<str.length;i++)h=(h*31+str.charCodeAt(i))>>>0;return h}
-var EXEC={RUNNING:['执行中','◉','good'],IDLE:['暂无执行','○','neutral'],STALE:['久未活动','◷','warn']};
-var PROTO={NONE:['暂无阶段','—','neutral'],COORDINATING:['协调中','◇','neutral'],JOINING:['加入中','+','neutral'],ACTIVE:['已就绪','✓','good'],ASSIGNED:['已分配','↗','neutral'],BLOCKED:['协作阻塞','!','bad'],IN_REVIEW:['审查中','◎','neutral'],REVIEWED:['已审查','✓','good'],COMPLETE:['已完成','✓','good']};
+var EXEC={UNKNOWN:['状态未知','?','neutral'],BLOCKED:['等待处理','!','bad'],RUNNING:['执行中','◉','good'],IDLE:['暂无执行','○','neutral'],STALE:['久未活动','◷','warn']};
+var PROTO={LEFT:['已退出','↗','neutral'],LEAVING:['交接退出中','↗','warn'],NONE:['暂无阶段','—','neutral'],COORDINATING:['协调中','◇','neutral'],JOINING:['加入中','+','neutral'],ACTIVE:['已就绪','✓','good'],ASSIGNED:['已分配','↗','neutral'],BLOCKED:['协作阻塞','!','bad'],IN_REVIEW:['审查中','◎','neutral'],REVIEWED:['已审查','✓','good'],COMPLETE:['已完成','✓','good']};
 function status(value,kind){var info=(kind==='exec'?EXEC:PROTO)[value]||[value||'未知','◇','neutral'];return '<span class="status '+info[2]+'" data-symbol="'+info[1]+'">'+esc(info[0])+'</span><span class="raw mono">'+esc(value||'UNKNOWN')+'</span>'}
 function scopeMatches(s,scope){return scope==='running'?s.exec==='RUNNING':scope==='blocked'?s.proto==='BLOCKED':scope==='stale'?s.exec==='STALE':true}
-function counts(sessions){return {total:sessions.length,running:sessions.filter(function(s){return scopeMatches(s,'running')}).length,blocked:sessions.filter(function(s){return scopeMatches(s,'blocked')}).length,stale:sessions.filter(function(s){return scopeMatches(s,'stale')}).length}}
-function attentionSessions(sessions){return sessions.filter(function(s){return s.proto==='BLOCKED'||s.exec==='STALE'})}
+function activeSessions(sessions){return sessions.filter(function(s){return s.membership!=='LEFT'&&s.proto!=='LEFT'})}
+function counts(sessions){sessions=activeSessions(sessions);return {total:sessions.length,running:sessions.filter(function(s){return scopeMatches(s,'running')}).length,blocked:sessions.filter(function(s){return scopeMatches(s,'blocked')}).length,stale:sessions.filter(function(s){return scopeMatches(s,'stale')}).length}}
+function attentionSessions(sessions){return activeSessions(sessions).filter(function(s){return s.proto==='BLOCKED'||s.exec==='STALE'})}
 function matchingMessages(messages,type,member,query){var q=query.trim().toLowerCase();return messages.filter(function(m){return (!type||m.type===type)&&(!member||m.from===member||m.to===member)&&(!q||[m.type,m.fromLabel,m.toLabel,m.from,m.to,m.id,m.re,m.status,m.ref].join(' ').toLowerCase().includes(q))})}
 function avatar(client){var known={claude:['CC','Claude Code'],codex:['CX','Codex CLI']},item=known[client]||['>_','CLI'];return '<span class="avatar cli-icon '+(known[client]?client:'generic')+'" role="img" aria-label="'+item[1]+'"><span class="terminal-bar" aria-hidden="true">•••</span><b>'+item[0]+'</b></span>'}
-function cardState(s){return s.proto==='BLOCKED'?'blocked':s.exec==='STALE'?'stale':s.exec==='RUNNING'?'running':s.proto==='IN_REVIEW'?'review':s.proto==='COMPLETE'?'complete':'idle'}
+function taskColumns(tasks){var states=['QUEUED','ASSIGNED','REVIEW_PENDING','PAUSED','DONE','STOPPED'];return states.concat(Array.from(new Set(tasks.map(function(t){return t.status}))).filter(function(s){return !states.includes(s)})).map(function(state){return {id:state,tasks:tasks.filter(function(t){return t.status===state})}})}
+function cardState(s){return s.proto==='BLOCKED'||s.exec==='BLOCKED'?'blocked':s.exec==='STALE'?'stale':s.exec==='RUNNING'?'running':s.proto==='IN_REVIEW'?'review':s.proto==='COMPLETE'?'complete':'idle'}
 function messageKey(m){return JSON.stringify([m.from,m.id||[m.ts,m.type,m.to]])}
 function newMessages(messages,previous){return previous===null?[]:messages.filter(function(m){return !previous.has(messageKey(m))}).slice(-4)}
 function edgeType(type){return /REVIEW/.test(type||'')?'review':/^(PEER|SCOPE)/.test(type||'')?'peer':/^(ASSIGN|JOIN|ACK|COORDINAT)|_ACK$/.test(type||'')?'assign':'other'}
 function edgeState(m){return m.type==='BLOCKED'||/blocked|reject|fail/i.test(m.status||'')?'blocked':m.type==='COMPLETE'||/approved|complete|success/i.test(m.status||'')?'complete':'observed'}
 function communicationGraph(sessions,messages,previous,viewport){
+  sessions=activeSessions(sessions);
   var ids=sessions.map(function(s){return s.id}).sort(),valid=new Set(ids),adj=new Map(ids.map(function(id){return [id,new Set()]})),edges=new Map();
-  messages.forEach(function(m){if(m.from===m.to||!valid.has(m.from)||!valid.has(m.to))return;var pair=[m.from,m.to].sort(),key=JSON.stringify(pair),edge=edges.get(key);if(!edge){edge={pair:pair,latest:m,count:0};edges.set(key,edge)}edge.count++;if((m.ts||0)>=(edge.latest.ts||0))edge.latest=m;adj.get(m.from).add(m.to);adj.get(m.to).add(m.from)});
+  messages.forEach(function(m){if(m.transport==='herdr'&&m.delivery!=='accepted')return;if(m.from===m.to||!valid.has(m.from)||!valid.has(m.to))return;var pair=[m.from,m.to].sort(),key=JSON.stringify(pair),edge=edges.get(key);if(!edge){edge={pair:pair,latest:m,count:0};edges.set(key,edge)}edge.count++;if((m.ts||0)>=(edge.latest.ts||0))edge.latest=m;adj.get(m.from).add(m.to);adj.get(m.to).add(m.from)});
   var order=previous?previous.order.filter(function(id){return valid.has(id)}):[],placed=new Set(order);ids.forEach(function(id){if(!placed.has(id))order.push(id)});edges.forEach(function(e){e.category=edgeType(e.latest.type);e.state=edgeState(e.latest)});
   return {order:order,edges:edges,adj:adj};
 }
@@ -443,7 +542,7 @@ function curvePath(a,b,nodes){
 }
 // DOM 与轮询状态。
 var $=function(s){return document.querySelector(s)},params=new URLSearchParams(location.search),demo=params.get('demo')==='1';
-var lastState=null,scope='all',selectedId=null,opener=null,paused=false,inFlight=false,lastSuccess=0,connectionError='',rows=new Map(),attentionRows=new Map(),peerRows=new Map();
+var lastState=null,scope='all',selectedId=null,paused=false,inFlight=false,lastSuccess=0,connectionError='',rows=new Map(),attentionRows=new Map(),peerRows=new Map();
 var detail=$('#detail');
 var stageRows=new Map(),seenMessages=null,motionEnabled=true,motion=matchMedia('(prefers-reduced-motion: reduce)'),flights=new Set();
 function motionAllowed(){return motionEnabled&&!motion.matches&&!paused&&!document.hidden&&!connectionError}
@@ -466,9 +565,9 @@ function initializeCanvas(){if(typeof d3==='undefined'){setText('#liveEmpty','�
 initializeCanvas();
 function renderStage(st){
   graph=communicationGraph(st.sessions,st.messages,graph);
-  $('#liveEmpty').hidden=!!st.sessions.length;
+  $('#liveEmpty').hidden=!!graph.order.length;
   var list=graph.order.map(function(id){return st.sessions.find(function(s){return s.id===id})});
-  keyed($('#liveGrid'),stageRows,list,function(s){var seat=document.createElement('button');seat.type='button';seat.className='live-seat';seat.dataset.open=s.id;seat.style.setProperty('--phase',-(hash(s.id)%45)/10+'s');seat.innerHTML='<span class="card-top"><span class="seat-art"></span><span class="card-identity"><strong></strong><span class="seat-tags"></span></span><span class="seat-state"></span></span><span class="card-activity"></span><span class="card-proto"></span><span class="card-bottom"><span class="seat-time"></span><span class="peer-count"></span></span>';return seat},function(seat,s){setHTML(seat.querySelector('.seat-art'),avatar(s.client));seat.dataset.exec=s.exec;seat.dataset.proto=s.proto;seat.dataset.role=s.role;seat.dataset.cardState=cardState(s);seat.querySelector('strong').textContent=s.name;seat.querySelector('strong').title=s.name;seat.querySelector('.seat-tags').textContent=clientName(s)+' · '+s.role+' · '+s.short;setHTML(seat.querySelector('.seat-state'),status(s.exec,'exec'));setHTML(seat.querySelector('.card-proto'),status(s.proto,'proto'));var text=s.exec==='RUNNING'?(s.tool||'正在生成内容或处理工具结果'):(s.lastText||'暂无最近输出');seat.querySelector('.card-activity').textContent=text;seat.querySelector('.card-activity').title=text;seat.querySelector('.seat-time').textContent=s.lastTs?'活动于 '+ago(Date.now()-s.lastTs):'活动时间未知';seat.querySelector('.peer-count').textContent=graph.adj.get(s.id).size+' 位通信对象 ›';seat.setAttribute('aria-label','查看 '+s.name+' 的成员详情，'+(EXEC[s.exec]?.[0]||s.exec)+'，'+(PROTO[s.proto]?.[0]||s.proto))});
+  keyed($('#liveGrid'),stageRows,list,function(s){var seat=document.createElement('button');seat.type='button';seat.className='live-seat';seat.dataset.open=s.id;seat.style.setProperty('--phase',-(hash(s.id)%45)/10+'s');seat.innerHTML='<span class="card-top"><span class="seat-art"></span><span class="card-identity"><strong></strong><span class="seat-tags"></span></span><span class="seat-state"></span></span><span class="card-activity"></span><span class="card-proto"></span><span class="card-bottom"><span class="seat-time"></span><span class="peer-count"></span></span>';return seat},function(seat,s){setHTML(seat.querySelector('.seat-art'),avatar(s.client));seat.dataset.exec=s.exec;seat.dataset.proto=s.proto;seat.dataset.role=s.role;seat.dataset.cardState=cardState(s);seat.querySelector('strong').textContent=s.name;seat.querySelector('strong').title=s.name;setHTML(seat.querySelector('.seat-tags'),'<span class="node-model">'+esc(s.model||'模型未知')+'</span><span class="node-effort">'+esc(s.effort||'强度未知')+'</span>');seat.querySelector('.seat-tags').title=clientName(s)+' · '+s.role+' · '+(s.model||'模型未记录')+' · 思考强度：'+(s.effort||'未记录');setHTML(seat.querySelector('.seat-state'),status(s.exec,'exec'));seat.querySelector('.seat-state').title=(s.execSource==='herdr-observed'?'herdr 当前观测':'日志推断，非实时')+(s.execObservedAt?' · '+hms(s.execObservedAt):'');setHTML(seat.querySelector('.card-proto'),status(s.proto,'proto'));var text=s.exec==='RUNNING'?(s.tool||'正在生成内容或处理工具结果'):(s.lastText||'暂无最近输出');seat.querySelector('.card-activity').textContent=text;seat.querySelector('.card-activity').title=text;seat.querySelector('.seat-time').textContent=s.lastTs?'活动于 '+ago(Date.now()-s.lastTs):'活动时间未知';seat.querySelector('.peer-count').textContent=graph.adj.get(s.id).size+' 位通信对象 ›';seat.setAttribute('aria-label','查看 '+s.name+' 的成员详情，'+(EXEC[s.exec]?.[0]||s.exec)+'，'+(PROTO[s.proto]?.[0]||s.proto))});
   drawGraph();
   var fresh=newMessages(st.messages,seenMessages);seenMessages=new Set(st.messages.map(messageKey));if(motionAllowed())fresh.forEach(fly);syncMotion();
 }
@@ -476,18 +575,24 @@ var selectedTaskId=null,ledgerWorkerId=null,taskRows=new Map();
 var TASK_LABELS={QUEUED:'待执行',ASSIGNED:'已分配',PAUSED:'已暂停',DONE:'已完成',STOPPED:'已停止',REVIEW_PENDING:'待审查'};
 function ledgerTasksFor(st,id){return (st.ledger?.tasks||[]).filter(function(t){return t.ownerSessionId===id||t.reviewerSessionId===id})}
 function applyTaskHighlight(){var task=lastState?.ledger?.tasks?.find(function(t){return t.id===selectedTaskId}),ids=task?[task.ownerSessionId,task.reviewerSessionId].filter(Boolean):ledgerWorkerId?[ledgerWorkerId]:[];stageRows.forEach(function(seat,id){seat.classList.toggle('task-linked',ids.includes(id));seat.classList.toggle('task-unrelated',!!ids.length&&!ids.includes(id))});if(ids.length===1)highlightGraph(ids[0]);else highlightGraph(null)}
-function selectLedgerTask(id){selectedTaskId=id;ledgerWorkerId=null;if(detail.open)detail.close();renderLedger(lastState);applyTaskHighlight()}
+function clearGraphFocus(){selectedTaskId=null;ledgerWorkerId=null;if(lastState)renderLedger(lastState);highlightGraph(null);$('#liveScroll').focus({preventScroll:true})}
+$('#clearGraphFocus').onclick=clearGraphFocus;
+$('#graphCanvas').addEventListener('click',function(e){if(!e.defaultPrevented&&!e.target.closest('.live-seat,.edge'))clearGraphFocus()});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!detail.open&&($('#liveScroll').contains(document.activeElement)||selectedTaskId||ledgerWorkerId)){e.preventDefault();clearGraphFocus()}});
+function selectLedgerTask(id){selectedTaskId=id;ledgerWorkerId=null;if(detail.open)detail.close('task');renderLedger(lastState);applyTaskHighlight()}
 function renderLedger(st){var ledger=st.ledger||{status:'unavailable',tasks:[],error:'未配置账本'},tasks=ledger.tasks||[],query=$('#ledgerSearch').value.trim().toLowerCase(),statusFilter=$('#ledgerStatus').value;setText('#ledgerSource',ledger.source==='git'?(ledger.ref||'Git')+' · '+(ledger.commit||'').slice(0,10):ledger.source==='directory'?'工作区快照 · 非固定 commit':ledger.source==='demo'?'演示账本 · 模拟数据':'账本未接入');$('#ledgerSource').title=ledger.sourcePath||'';setText('#ledgerNotice',ledger.error||(ledger.diagnostics||[]).map(function(d){return d.message||String(d)}).join('；')||(ledger.source==='git'?'本地 Git 快照，不自动拉取远端':'任务状态与 Worker 执行活动分别记录'));updateOptions($('#ledgerStatus'),[['','全部状态']].concat(Array.from(new Set(tasks.map(function(t){return t.status}))).map(function(s){return [s,TASK_LABELS[s]||s]})));
   var list=tasks.filter(function(t){return (!query||[t.id,t.title,t.owner,t.reviewer].join(' ').toLowerCase().includes(query))&&(!statusFilter||t.status===statusFilter)&&(!ledgerWorkerId||t.ownerSessionId===ledgerWorkerId||t.reviewerSessionId===ledgerWorkerId)});$('#ledgerEmpty').hidden=!!list.length;setText('#ledgerEmpty',tasks.length?'没有匹配的任务。':ledger.status==='ok'?'账本暂无任务。':'未读取到任务。请使用 --ledger-repo 指向账本仓库，或 --ledger-dir 指定包含 plan.md / roster.md 的目录。');$('#ledgerSelection').hidden=!selectedTaskId&&!ledgerWorkerId;setText('#ledgerSelectionText',ledgerWorkerId?'筛选成员：'+(st.sessions.find(function(s){return s.id===ledgerWorkerId})?.name||ledgerWorkerId):selectedTaskId?'选中任务：'+selectedTaskId:'');
-  keyed($('#ledgerTasks'),taskRows,list,function(t){var b=document.createElement('button');b.type='button';b.className='ledger-task';b.dataset.task=t.id;return b},function(b,t){b.dataset.status=t.status;b.setAttribute('aria-pressed',String(t.id===selectedTaskId));var ownerSession=st.sessions.find(function(s){return s.id===t.ownerSessionId});setHTML(b,'<span class="task-meta"><code>'+esc(t.id)+'</code><span>'+esc(t.priority||'—')+'</span><span class="task-status">'+esc(TASK_LABELS[t.status]||t.status)+'</span></span><strong>'+esc(t.title)+'</strong><span class="task-owner">Owner · '+esc(t.owner||'未记录')+' <span>'+esc(ownerSession?'已关联 · '+(EXEC[ownerSession.exec]?.[0]||ownerSession.exec):'未关联')+'</span></span>')});
+  var columns=taskColumns(list),board=$('#ledgerTasks');board.hidden=!list.length;
+  columns.forEach(function(column){var section=Array.from(board.children).find(function(el){return el.dataset.column===column.id});if(!section){section=document.createElement('section');section.className='kanban-column';section.dataset.column=column.id;section.innerHTML='<h3><span></span><b></b></h3><div class="kanban-cards"></div><p class="kanban-empty">暂无任务</p>';board.appendChild(section)}section.querySelector('h3 span').textContent=TASK_LABELS[column.id]||column.id;section.querySelector('h3 b').textContent=column.tasks.length;section.querySelector('.kanban-empty').hidden=!!column.tasks.length;column.tasks.forEach(function(t){var card=taskRows.get(t.id);if(!card){card=(function(t){var b=document.createElement('button');b.type='button';b.className='ledger-task';b.dataset.task=t.id;return b})(t);taskRows.set(t.id,card)}(function(b,t){b.dataset.status=t.status;b.setAttribute('aria-pressed',String(t.id===selectedTaskId));var ownerSession=st.sessions.find(function(s){return s.id===t.ownerSessionId});setHTML(b,'<span class="task-meta"><code>'+esc(t.id)+'</code><span>'+esc(t.priority||'—')+'</span><span class="task-status">'+esc(TASK_LABELS[t.status]||t.status)+'</span></span><strong>'+esc(t.title)+'</strong><span class="task-owner">Owner · '+esc(t.owner||'未记录')+' <span>'+esc(ownerSession?'已关联 · '+(EXEC[ownerSession.exec]?.[0]||ownerSession.exec):'未关联')+'</span></span>')})(card,t);var container=section.querySelector('.kanban-cards');if(card.parentNode!==container)container.appendChild(card)})});
+  taskRows.forEach(function(card,id){if(!list.some(function(t){return t.id===id})){if(card.contains(document.activeElement))$('#ledgerSearch').focus();card.remove();taskRows.delete(id)}});Array.from(board.children).forEach(function(section){if(!columns.some(function(c){return c.id===section.dataset.column}))section.remove()});
   var t=tasks.find(function(t){return t.id===selectedTaskId});$('#ledgerTaskDetail').hidden=!t;if(t){var member=function(kind){var id=t[kind+'SessionId'],name=t[kind]||'未记录';return id?'<button type="button" data-open="'+esc(id)+'">'+esc(name)+' ↗</button>':esc(name)+' · '+esc(t[kind+'LinkReason']||'未关联当前会话')};setHTML($('#ledgerTaskDetail'),'<h3>'+esc(t.id)+' · 任务详情</h3><dl><dt>状态</dt><dd>'+esc(TASK_LABELS[t.status]||t.status)+' <code>'+esc(t.status)+'</code></dd><dt>Owner</dt><dd>'+member('owner')+'</dd><dt>Reviewer</dt><dd>'+member('reviewer')+'</dd><dt>Mission</dt><dd>'+esc(t.mission||'未记录')+'</dd><dt>依赖</dt><dd>'+esc((t.dependsOn||[]).join(' · ')||'未记录')+'</dd><dt>DUE</dt><dd>'+esc(t.due||'未记录')+'</dd><dt>回执 / 证据</dt><dd>'+esc((t.receipts||[]).join(' · ')||'未记录')+'</dd></dl><p class="sub">任务状态来自账本；成员活动不代表该任务的执行证据。</p>')}
   applyTaskHighlight();
 }
 $('#detailTasks').addEventListener('click',function(e){var t=e.target.closest('[data-task]');if(t)selectLedgerTask(t.dataset.task)});
-$('#ledgerTasks').addEventListener('click',function(e){var t=e.target.closest('[data-task]');if(t)selectLedgerTask(t.dataset.task)});['#ledgerSearch','#ledgerStatus'].forEach(function(s){$(s).addEventListener(s==='#ledgerSearch'?'input':'change',function(){if(lastState)renderLedger(lastState)})});$('#clearLedgerSelection').onclick=function(){selectedTaskId=null;ledgerWorkerId=null;renderLedger(lastState)};
+$('#ledgerTasks').addEventListener('click',function(e){var t=e.target.closest('[data-task]');if(t)selectLedgerTask(t.dataset.task)});['#ledgerSearch','#ledgerStatus'].forEach(function(s){$(s).addEventListener(s==='#ledgerSearch'?'input':'change',function(){if(lastState)renderLedger(lastState)})});$('#clearLedgerSelection').onclick=clearGraphFocus;
 function reactSeat(seat,type){seat.classList.remove('reacting');void seat.offsetWidth;seat.classList.add('reacting');var bubble=document.createElement('span');bubble.className='seat-bubble';bubble.textContent=type;seat.appendChild(bubble);setTimeout(function(){bubble.remove()},1500)}
 function fly(m){
-  var from=stageRows.get(m.from),to=stageRows.get(m.to);if(!from||!to||flights.size>=4||!motionAllowed())return;
+  var from=stageRows.get(m.from),to=stageRows.get(m.to);if((m.transport==='herdr'&&m.delivery!=='accepted')||!from||!to||flights.size>=4||!motionAllowed())return;
   var d=graph.paths.get(JSON.stringify([m.from,m.to].sort()));if(!d){reactSeat(from,m.type);reactSeat(to,m.type);return}
   var scroll=$('#liveScroll'),base=scroll.getBoundingClientRect(),a=from.getBoundingClientRect(),b=to.getBoundingClientRect();if(a.bottom<base.top||b.bottom<base.top||a.top>base.bottom||b.top>base.bottom||a.right<base.left||b.right<base.left||a.left>base.right||b.left>base.right)return;
   var NS='http://www.w3.org/2000/svg',path=document.createElementNS(NS,'path');path.setAttribute('d',d);path.setAttribute('visibility','hidden');$('#mailLayer').appendChild(path);var length=path.getTotalLength(),reverse=m.from!==graph.edges.get(JSON.stringify([m.from,m.to].sort())).pair[0],g=document.createElementNS(NS,'g');g.setAttribute('class','mail-token');g.style.setProperty('--accent','var(--type-'+edgeType(m.type)+')');g.innerHTML='<rect x="-10" y="-7" width="20" height="14" rx="3" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.5"/><path d="M-8 -5L0 1L8 -5" fill="none" stroke="var(--accent)" stroke-width="1.5"/>';$('#mailLayer').appendChild(g);
@@ -502,21 +607,32 @@ function clientName(s){return s.client==='codex'?'Codex':s.client==='claude'?'Cl
 function roleName(s){return ({Leader:'协调者',Worker:'执行者',Reviewer:'审查者'})[s.role]||s.role}
 function updateOptions(select,options){var selected=select.value,available=new Set(options.map(function(o){return o[0]}));if(selected&&!available.has(selected))options.push([selected,(select.selectedOptions[0]?.textContent||selected)+'（当前无数据）']);var signature=JSON.stringify(options);if(select._options===signature)return;select._options=signature;select.replaceChildren.apply(select,options.map(function(o){var n=document.createElement('option');n.value=o[0];n.textContent=o[1];return n}));select.value=selected}
 function keyed(container,map,items,make,update){var alive=new Set();items.forEach(function(item,index){alive.add(item.id);var row=map.get(item.id);if(!row){row=make(item);map.set(item.id,row)}update(row,item);var at=container.children[index];if(at!==row)container.insertBefore(row,at||null)});map.forEach(function(row,id){if(!alive.has(id)){if(row.contains(document.activeElement))$(detail.open?'#closeDetail':'#membersTitle').focus();row.remove();map.delete(id)}})}
-function renderMembers(st){var list=st.sessions.filter(function(s){return scopeMatches(s,scope)}).slice().sort(function(a,b){return (b.role==='Leader')-(a.role==='Leader')||a.name.localeCompare(b.name)||a.id.localeCompare(b.id)});setText('#memberCount',list.length+' / '+st.sessions.length);$('#clearScope').hidden=scope==='all';$('#membersEmpty').hidden=!!list.length;setText('#membersEmpty',st.sessions.length?'没有符合当前状态的成员。':'当前项目暂无团队活动。请确认项目名、日志目录与启动时间范围；成员需有对应项目的协议通信。');
+function renderMembers(st){st=Object.assign({},st,{sessions:activeSessions(st.sessions)});var list=st.sessions.filter(function(s){return scopeMatches(s,scope)}).slice().sort(function(a,b){return (b.role==='Leader')-(a.role==='Leader')||a.name.localeCompare(b.name)||a.id.localeCompare(b.id)});setText('#memberCount',list.length+' / '+st.sessions.length);$('#clearScope').hidden=scope==='all';$('#membersEmpty').hidden=!!list.length;setText('#membersEmpty',st.sessions.length?'没有符合当前状态的成员。':'当前项目暂无团队活动。请确认项目名、日志目录与启动时间范围；成员需有对应项目的协议通信。');
 keyed($('#memberRows'),rows,list,function(s){var row=document.createElement('article');row.className='member-row';row.innerHTML='<div class="member-id"><div class="member-avatar"></div><div class="identity"><button type="button" class="member-name" data-open=""></button><div class="sub"><span class="member-role"></span><span class="member-client badge"></span><code class="member-short"></code></div></div></div><div class="member-exec"></div><div class="member-proto"></div><div class="activity"><div class="activity-text"></div><div class="member-actions"><span class="sub member-time"></span><button type="button" class="text-button" data-messages="">查看消息 ↗</button></div></div>';row.querySelector('[data-open]').dataset.open=s.id;row.querySelector('[data-messages]').dataset.messages=s.id;return row},function(row,s){setHTML(row.querySelector('.member-avatar'),avatar(s.client));var name=row.querySelector('.member-name');name.textContent=s.name;name.setAttribute('aria-label','查看 '+s.name+' 的成员详情');row.querySelector('.member-role').textContent=s.role+' · '+roleName(s);row.querySelector('.member-client').textContent=clientName(s);row.querySelector('.member-short').textContent=s.short;row.querySelector('.member-short').title=s.id;setHTML(row.querySelector('.member-exec'),status(s.exec,'exec'));setHTML(row.querySelector('.member-proto'),status(s.proto,'proto'));var activity=row.querySelector('.activity-text');activity.textContent=s.exec==='RUNNING'?(s.tool||'正在生成内容或处理工具结果'):s.lastText||'暂无输出记录';activity.title=activity.textContent;var time=row.querySelector('.member-time');time.textContent=s.lastTs?ago(Date.now()-s.lastTs):'时间未知';time.title=s.lastTs?new Date(s.lastTs).toLocaleString('zh-CN'):''})}
 function renderAttention(st){var list=attentionSessions(st.sessions);setText('#attentionCount',list.length);$('#attentionEmpty').hidden=!!list.length;setText('#attentionEmpty','当前未发现协作阻塞或久未活动的成员。');keyed($('#attention'),attentionRows,list,function(s){var row=document.createElement('div');row.className='attention-item';row.innerHTML='<button type="button" data-open=""></button><p></p><div class="reasons"></div>';row.querySelector('button').dataset.open=s.id;return row},function(row,s){row.querySelector('button').textContent=s.name;row.querySelector('p').textContent=s.lastTs?'最后活动 '+ago(Date.now()-s.lastTs):'暂无活动时间';setHTML(row.querySelector('.reasons'),(s.proto==='BLOCKED'?'<span class="reason bad">! 协议阻塞</span> ':'')+(s.exec==='STALE'?'<span class="reason">◷ 超过 30 分钟无活动</span>':''))})}
-function renderMessages(st){updateOptions($('#typeFilter'),[['','全部类型']].concat(Array.from(new Set(st.messages.map(function(m){return m.type}))).sort().map(function(t){return [t,t]})));updateOptions($('#memberFilter'),[['','全部成员']].concat(st.sessions.map(function(s){return [s.id,s.name+' · '+s.short]})));var matches=matchingMessages(st.messages,$('#typeFilter').value,$('#memberFilter').value,$('#search').value),list=matches.slice(-100).reverse();setText('#retained',st.messages.length+' 条保留记录');setText('#resultCount','显示 '+list.length+' 条 / 匹配 '+matches.length+' 条');setHTML($('#msgs'),list.map(function(m){return '<tr><td class="mono" title="'+esc(new Date(m.ts).toLocaleString('zh-CN'))+'">'+esc(hms(m.ts))+'</td><td><div class="route"><span>'+esc(m.fromLabel||'身份未解析')+'</span><span>→ '+esc(m.toLabel||'身份未解析')+'</span></div></td><td><span class="type-label mono">'+esc(m.type)+(m.p2p?'<small>成员间通信 · P2P</small>':'')+'</span></td><td><code>'+esc(m.id||'—')+'</code></td><td><code>'+esc(m.re||'—')+'</code></td><td><code>'+esc([m.status,m.ref].filter(Boolean).join(' · ')||'—')+'</code></td></tr>'}).join('')||'<tr><td colspan="6" class="empty">'+(st.messages.length?'没有匹配记录，请调整或清除筛选。':'当前消息窗口暂无协议记录。')+'</td></tr>')}
-function renderDetail(st){if(!selectedId)return;var s=st.sessions.find(function(x){return x.id===selectedId});$('#missing').hidden=!!s;$('#detailData').hidden=!s;$('#viewMessages').disabled=!s;if(!s)return;setText('#detailTitle',s.name);setHTML($('#detailAvatar'),avatar(s.client));setHTML($('#detailTags'),'<span class="badge">'+esc(s.role)+' · '+esc(roleName(s))+'</span><span class="badge">'+esc(clientName(s))+'</span>');setHTML($('#detailExec'),status(s.exec,'exec'));setHTML($('#detailProto'),status(s.proto,'proto'));setText('#detailTool',s.exec==='RUNNING'?(s.tool||'正在生成内容或处理工具结果'):'当前没有执行中的工具记录');setText('#detailText',s.lastText||'暂无输出记录');setText('#detailId',s.id);setText('#detailCwd',s.cwd||'未记录');setText('#detailTime',s.lastTs?new Date(s.lastTs).toLocaleString('zh-CN')+' · '+ago(Date.now()-s.lastTs):'未记录');setHTML($('#detailTools'),s.recentTools.slice().reverse().map(function(t){return '<li class="mono">'+esc(t)+'</li>'}).join('')||'<li class="muted">暂无工具记录</li>');setHTML($('#detailTasks'),ledgerTasksFor(st,s.id).map(function(t){return '<button type="button" data-task="'+esc(t.id)+'">'+esc(t.id)+' · '+esc(t.title)+' · '+esc(t.ownerSessionId===s.id?'负责':'审查')+'</button>'}).join('')||'<span class="muted">无已关联任务</span>');var mine=st.messages.filter(function(m){return m.from===s.id||m.to===s.id}),peers=new Map();mine.forEach(function(m){var id=m.from===s.id?m.to:m.from;if(id)peers.set(id,(peers.get(id)||0)+1)});var peerItems=Array.from(peers,function(p){return {id:p[0],count:p[1],session:st.sessions.find(function(x){return x.id===p[0]})}});keyed($('#detailPeers'),peerRows,peerItems,function(p){var b=document.createElement('button');b.type='button';b.dataset.open=p.id;return b},function(b,p){b.textContent=(p.session?p.session.name:p.id)+' · '+p.count;b.disabled=!p.session});var peerEmpty=$('#detailPeers').querySelector('span');if(!peerItems.length&&!peerEmpty){peerEmpty=document.createElement('span');peerEmpty.className='muted';peerEmpty.textContent='暂无已解析的通信对象';$('#detailPeers').appendChild(peerEmpty)}else if(peerItems.length&&peerEmpty)peerEmpty.remove();setHTML($('#detailMessages'),mine.slice(-12).reverse().map(function(m){return '<div class="drawer-message"><b class="mono">'+esc(m.type)+'</b><small>'+esc(m.from===s.id?'→ '+(m.toLabel||'身份未解析'):'← '+(m.fromLabel||'身份未解析'))+' · '+esc(hms(m.ts))+'</small></div>'}).join('')||'<p class="muted">暂无相关消息</p>')}
-function render(st){if(demo)st.ledger=demoLedger(st);lastState=st;setText('#project',st.project);var c=counts(st.sessions);Object.keys(c).forEach(function(k){setText('#'+k,c[k])});renderStage(st);renderMembers(st);renderAttention(st);renderMessages(st);renderDetail(st);renderLedger(st)}
-function openDetail(id,trigger){if(!lastState)return;ledgerWorkerId=id;selectedTaskId=null;renderLedger(lastState);if(!detail.open)opener=trigger||document.activeElement;selectedId=id;renderDetail(lastState);if(!detail.open)detail.showModal()}
+function renderMessages(st){updateOptions($('#typeFilter'),[['','全部类型']].concat(Array.from(new Set(st.messages.map(function(m){return m.type}))).sort().map(function(t){return [t,t]})));updateOptions($('#memberFilter'),[['','全部成员']].concat(st.sessions.map(function(s){return [s.id,s.name+' · '+s.short]})));var matches=matchingMessages(st.messages,$('#typeFilter').value,$('#memberFilter').value,$('#search').value),list=matches.slice(-100).reverse();setText('#retained',st.messages.length+' 条保留记录');setText('#resultCount','显示 '+list.length+' 条 / 匹配 '+matches.length+' 条');setHTML($('#msgs'),list.map(function(m){return '<tr><td class="mono" title="'+esc(new Date(m.ts).toLocaleString('zh-CN'))+'">'+esc(hms(m.ts))+'</td><td><div class="route"><span>'+esc(m.fromLabel||'身份未解析')+'</span><span>→ '+esc(m.toLabel||'身份未解析')+'</span></div></td><td><span class="type-label mono">'+esc(m.type)+(m.p2p?'<small>成员间通信 · P2P</small>':'')+'</span></td><td><code>'+esc(m.id||'—')+'</code></td><td><code>'+esc(m.re||'—')+'</code></td><td><code>'+esc([m.transport==='herdr'?'herdr · '+({accepted:'工具已接受',failed:'发送失败',pending:'结果未回',unknown:'结果未知'}[m.delivery]||'结果未知'):null,m.status,m.ref].filter(Boolean).join(' · ')||'—')+'</code></td></tr>'}).join('')||'<tr><td colspan="6" class="empty">'+(st.messages.length?'没有匹配记录，请调整或清除筛选。':'当前消息窗口暂无协议记录。')+'</td></tr>')}
+function renderDetail(st){if(!selectedId)return;var s=st.sessions.find(function(x){return x.id===selectedId});$('#missing').hidden=!!s;$('#detailData').hidden=!s;$('#viewMessages').disabled=!s;if(!s)return;setText('#detailTitle',s.name);setHTML($('#detailAvatar'),avatar(s.client));setHTML($('#detailTags'),'<span class="badge">'+esc(s.role)+' · '+esc(roleName(s))+'</span><span class="badge">'+esc(clientName(s))+'</span>');setHTML($('#detailExec'),status(s.exec,'exec'));setHTML($('#detailProto'),status(s.proto,'proto'));setText('#detailTool',s.exec==='RUNNING'?(s.tool||'正在生成内容或处理工具结果'):'当前没有执行中的工具记录');setText('#detailText',s.lastText||'暂无输出记录');setText('#detailExecSource',s.execSource==='herdr-observed'?'herdr 当前观测':'会话日志推断（非实时）');setText('#detailExecTime',s.execObservedAt?new Date(s.execObservedAt).toLocaleString('zh-CN'):'未知');setText('#detailModel',s.model||'未知（日志未记录）');setText('#detailEffort',s.effort||'未知（日志未记录）');setText('#detailModelTime',s.modelObservedAt?new Date(s.modelObservedAt).toLocaleString('zh-CN'):'未记录');setText('#detailId',s.id);setText('#detailCwd',s.cwd||'未记录');setText('#detailTime',s.lastTs?new Date(s.lastTs).toLocaleString('zh-CN')+' · '+ago(Date.now()-s.lastTs):'未记录');setHTML($('#detailTools'),s.recentTools.slice().reverse().map(function(t){return '<li class="mono">'+esc(t)+'</li>'}).join('')||'<li class="muted">暂无工具记录</li>');setHTML($('#detailTasks'),ledgerTasksFor(st,s.id).map(function(t){return '<button type="button" data-task="'+esc(t.id)+'">'+esc(t.id)+' · '+esc(t.title)+' · '+esc(t.ownerSessionId===s.id?'负责':'审查')+'</button>'}).join('')||'<span class="muted">无已关联任务</span>');var mine=st.messages.filter(function(m){return m.from===s.id||m.to===s.id}),peers=new Map();mine.forEach(function(m){var id=m.from===s.id?m.to:m.from;if(id)peers.set(id,(peers.get(id)||0)+1)});var peerItems=Array.from(peers,function(p){return {id:p[0],count:p[1],session:st.sessions.find(function(x){return x.id===p[0]})}});keyed($('#detailPeers'),peerRows,peerItems,function(p){var b=document.createElement('button');b.type='button';b.dataset.open=p.id;return b},function(b,p){b.textContent=(p.session?p.session.name:p.id)+' · '+p.count;b.disabled=!p.session});var peerEmpty=$('#detailPeers').querySelector('span');if(!peerItems.length&&!peerEmpty){peerEmpty=document.createElement('span');peerEmpty.className='muted';peerEmpty.textContent='暂无已解析的通信对象';$('#detailPeers').appendChild(peerEmpty)}else if(peerItems.length&&peerEmpty)peerEmpty.remove();setHTML($('#detailMessages'),mine.slice(-12).reverse().map(function(m){return '<div class="drawer-message"><b class="mono">'+esc(m.type)+'</b><small>'+esc(m.from===s.id?'→ '+(m.toLabel||'身份未解析'):'← '+(m.fromLabel||'身份未解析'))+' · '+esc(hms(m.ts))+'</small></div>'}).join('')||'<p class="muted">暂无相关消息</p>')}
+function render(st){if(demo)st.ledger=demoLedger(st);lastState=st;setText('#observerStatus',st.observation?.status==='ok'?'herdr 观测 '+hms(st.observation.observedAt):demo?'模拟数据':'herdr 不可用 · 日志推断');updateTeamSelection(st);setText('#project',st.project||'暂无团队');var c=counts(st.sessions);Object.keys(c).forEach(function(k){setText('#'+k,c[k])});renderStage(st);renderMembers(st);renderAttention(st);renderMessages(st);renderDetail(st);renderLedger(st)}
+function openDetail(id,trigger){if(!lastState)return;ledgerWorkerId=id;selectedTaskId=null;renderLedger(lastState);selectedId=id;renderDetail(lastState);if(!detail.open)detail.showModal()}
 function showMessages(id){$('#memberFilter').value=id;if(detail.open)detail.close('messages');if(lastState)renderMessages(lastState);$('#messagesTitle').focus();$('#messages').scrollIntoView({block:'start'})}
 document.addEventListener('click',function(e){var open=e.target.closest('[data-open]'),messages=e.target.closest('[data-messages]');if(open)openDetail(open.dataset.open,open);if(messages)showMessages(messages.dataset.messages)});
-$('#closeDetail').onclick=function(){detail.close()};detail.addEventListener('close',function(){selectedId=null;if(detail.returnValue!=='messages'){if(opener&&opener.isConnected)opener.focus();else $('#membersTitle').focus()}detail.returnValue=''});
+$('#closeDetail').onclick=function(){detail.close()};detail.addEventListener('close',function(){selectedId=null;if(detail.returnValue==='switch'){detail.returnValue='';return}if(detail.returnValue==='task'){applyTaskHighlight()}else if(detail.returnValue==='messages'){selectedTaskId=null;ledgerWorkerId=null;if(lastState)renderLedger(lastState);highlightGraph(null)}else clearGraphFocus();detail.returnValue=''});
 Array.from(document.querySelectorAll('[data-scope]')).forEach(function(b){b.onclick=function(){scope=b.dataset.scope;document.querySelectorAll('[data-scope]').forEach(function(x){x.setAttribute('aria-pressed',String(x===b))});if(lastState)renderMembers(lastState)}});
 $('#clearScope').onclick=function(){document.querySelector('[data-scope="all"]').click();$('#membersTitle').focus()};
 ['#typeFilter','#memberFilter'].forEach(function(selector){$(selector).addEventListener('change',function(){if(lastState)renderMessages(lastState)})});$('#search').addEventListener('input',function(){if(lastState)renderMessages(lastState)});$('#clearFilters').onclick=function(){$('#search').value=$('#typeFilter').value=$('#memberFilter').value='';if(lastState)renderMessages(lastState);$('#search').focus()};
 function renderConnection(){var label=connectionError?'连接失败':demo?(demoAt!==null?'演示已冻结':paused?'演示已暂停':'演示数据'):paused?'刷新已暂停':inFlight?'正在刷新':'自动刷新 · 3 秒';setText('#connection',label);$('#connection').dataset.state=connectionError?'error':paused?'paused':'ok';$('#pause').textContent=paused?'继续刷新':'暂停刷新';$('#pause').setAttribute('aria-pressed',String(paused));$('#pause').disabled=demo&&demoAt!==null;$('#refresh').disabled=inFlight||(demo&&demoAt!==null);$('#error').hidden=!connectionError;setText('#error',connectionError?'无法连接 dashboard 服务（'+connectionError+'）。'+(lastSuccess?'当前保留 '+hms(lastSuccess)+' 的数据，可能已过期。':'尚未获取到数据，请确认服务已启动。'):'');setText('#updated',lastSuccess?'最后成功更新 '+hms(lastSuccess):'等待首次数据');syncMotion()}
-async function tick(manual){if(inFlight||(!manual&&(paused||document.hidden)))return;if(demo){if(demoAt!==null){if(!lastState){for(var i=0;i<=demoAt;i++)DEMO[i]();render(JSON.parse(JSON.stringify(demoSt)));var id=params.get('open');if(id&&demoSt.sessions.some(function(s){return s.id===id}))openDetail(id)}}else demoTick();lastSuccess=Date.now();renderConnection();return}inFlight=true;renderConnection();try{var response=await fetch('/api/state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw new Error('HTTP '+response.status);var st=await response.json();render(st);lastSuccess=Date.now();connectionError=''}catch(e){connectionError=e.message;if(!lastState){setText('#membersEmpty','暂时无法读取团队数据，请检查连接后重试。');setText('#attentionEmpty','尚未获取到数据');setHTML($('#msgs'),'<tr><td colspan="6" class="empty">尚未获取到通信记录。</td></tr>')}}finally{inFlight=false;renderConnection()}}
+var selectedProject=params.get('project')||null,requestGeneration=0,requestController=null;
+function updateTeamSelection(st){var projects=st.availableProjects||[];if(st.project&&!projects.some(function(p){return p.project===st.project}))projects=projects.concat([{project:st.project}]);updateOptions($('#teamFilter'),projects.length?projects.map(function(p){return [p.project,p.project]}):[['','暂无团队']]);$('#teamFilter').value=st.project||'';$('#teamFilter').disabled=demo||!projects.length;selectedProject=st.project||null;if(!demo&&selectedProject){var url=new URL(location.href);url.searchParams.set('project',selectedProject);history.replaceState(null,'',url)}}
+function switchTeam(project){if(!project||project===selectedProject)return;requestGeneration++;if(requestController)requestController.abort();inFlight=false;selectedProject=project;lastSuccess=0;connectionError='';if(simulation)simulation.stop();flights.forEach(function(f){f.cancel()});cancelAnimationFrame(pendingGraphFrame);graph=null;forceNodes=new Map();layoutSignature='';seenMessages=null;selectedTaskId=null;ledgerWorkerId=null;selectedId=null;if(detail.open)detail.close('switch');scope='all';document.querySelectorAll('[data-scope]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.scope==='all'))});['#search','#ledgerSearch'].forEach(function(s){$(s).value=''});['#typeFilter','#memberFilter','#ledgerStatus'].forEach(function(s){$(s).value='';$(s)._options=null;$(s).replaceChildren()});[[stageRows,'#liveGrid'],[edgeRows,'#graphLines'],[rows,'#memberRows'],[attentionRows,'#attention'],[peerRows,'#detailPeers'],[taskRows,'#ledgerTasks']].forEach(function(pair){pair[0].clear();$(pair[1]).replaceChildren();$(pair[1])._html=null});if(zoomBehavior)d3.select($('#graphCanvas')).call(zoomBehavior.transform,d3.zoomIdentity);render({project:project,availableProjects:Array.from($('#teamFilter').options).filter(function(o){return o.value}).map(function(o){return {project:o.value}}),sessions:[],messages:[],ledger:{status:'unavailable',tasks:[],diagnostics:[],error:'正在读取此团队账本…'}});lastState=null;tick(true)}
+$('#teamFilter').addEventListener('change',function(){switchTeam(this.value)});
+async function tick(manual){
+  if(inFlight||(!manual&&(paused||document.hidden)))return;
+  if(demo){if(demoAt!==null){if(!lastState){for(var i=0;i<=demoAt;i++)DEMO[i]();render(JSON.parse(JSON.stringify(demoSt)));var id=params.get('open');if(id&&demoSt.sessions.some(function(s){return s.id===id}))openDetail(id)}}else demoTick();lastSuccess=Date.now();renderConnection();return}
+  var generation=requestGeneration;requestController=new AbortController();var controller=requestController,timer=setTimeout(function(){controller.abort()},10000);inFlight=true;renderConnection();
+  try{var response=await fetch('/api/state'+(selectedProject?'?project='+encodeURIComponent(selectedProject):''),{cache:'no-store',signal:controller.signal});if(!response.ok)throw new Error('HTTP '+response.status);var st=await response.json();if(generation!==requestGeneration)return;render(st);lastSuccess=Date.now();connectionError=''}
+  catch(e){if(generation!==requestGeneration)return;connectionError=e.message;if(!lastState){setText('#membersEmpty','暂时无法读取团队数据，请检查连接后重试。');setText('#attentionEmpty','尚未获取到数据');setHTML($('#msgs'),'<tr><td colspan="6" class="empty">尚未获取到通信记录。</td></tr>')}}
+  finally{clearTimeout(timer);if(generation===requestGeneration){inFlight=false;requestController=null;renderConnection()}}
+}
 $('#pause').onclick=function(){paused=!paused;renderConnection();if(!paused)tick(true)};$('#refresh').onclick=function(){tick(true)};document.addEventListener('visibilitychange',function(){syncMotion();if(!document.hidden)tick(false)});
 // 沿用协议演示，固定步骤便于复查布局与交互。
 var demoStep=0,demoSt=null,demoN=0;

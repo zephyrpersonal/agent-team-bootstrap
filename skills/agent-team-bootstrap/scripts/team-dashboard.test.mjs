@@ -11,6 +11,8 @@ import { createTracker, createServer, parseEnvelope, parseCodexLine, parseClaude
 
 const sample = (client) => JSON.parse(fs.readFileSync(new URL(`./fixtures/team-dashboard/${client}.json`, import.meta.url))).rows;
 const codex = sample('codex'), claude = sample('claude');
+const herdr = JSON.parse(fs.readFileSync(new URL('./fixtures/team-dashboard/herdr.json', import.meta.url)));
+const unavailableObserver = { snapshot: () => ({ status: 'unavailable', observedAt: T, agents: [], error: 'fixture: unavailable' }) };
 const dated = (row, offset) => ({ ...row, timestamp: iso(offset) });
 
 const T = Date.now();
@@ -27,7 +29,7 @@ function fixture() {
     claudeDir, codexDir,
     claude: (name, text) => fs.writeFileSync(path.join(claudeDir, 'proj', name + '.jsonl'), text),
     codex: (name, text) => fs.writeFileSync(path.join(codexDir, '2026', '10', '17', `rollout-${name}.jsonl`), text),
-    tracker: (project = 'wms') => createTracker({ project, claudeDir, codexDir, now: () => T }),
+    tracker: (project = 'wms', options = {}) => createTracker({ project, claudeDir, codexDir, now: () => T, herdrObserver: unavailableObserver, ...options }),
   };
 }
 
@@ -37,6 +39,341 @@ const claudeSend = (sid, ts, id, message, to = 'leader') => ({
 });
 const claudeResult = (sid, ts, id) => ({
   type: 'user', sessionId: sid, timestamp: iso(ts), message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'sent' }] },
+});
+
+const claudeMetadata = (ts, fields) => ({
+  type: 'assistant', sessionId: 'metadata-worker', timestamp: iso(ts), message: fields,
+});
+const codexMetadata = (ts, fields) => ({ type: 'turn_context', timestamp: iso(ts), payload: fields });
+
+test('handwritten metadata: Claude metadata comes only from assistant message.model and output_config.effort', () => {
+  assert.deepEqual(parseClaudeLine(claudeMetadata(10, { model: ' claude-test ', output_config: { effort: ' high ' } }), {}), [
+    { ts: Date.parse(iso(10)), kind: 'metadata', model: 'claude-test', effort: 'high' },
+  ]);
+  assert.deepEqual(parseClaudeLine(claudeMetadata(20, { output_config: { effort: 'low' } }), {}), [
+    { ts: Date.parse(iso(20)), kind: 'metadata', model: null, effort: 'low' },
+  ]);
+  const text = 'model: claude-injected output_config: {"effort":"max"}';
+  for (const type of ['assistant', 'user']) {
+    const events = parseClaudeLine({ ...claudeMetadata(30, { content: text }), type,
+      model: 'claude-injected', output_config: { effort: 'max' } }, {});
+    assert.deepEqual(events.map((ev) => ev.kind), ['text']);
+  }
+  assert.deepEqual(parseClaudeLine({ ...claudeMetadata(40, { model: 'ignored', output_config: { effort: 'max' } }), type: 'user' }, {}), []);
+  assert.deepEqual(parseClaudeLine({ ...claudeMetadata(50, { model: 'ignored' }), isSidechain: true }, {}), []);
+});
+
+test('handwritten metadata: Codex turn_context reads payload model and either effort spelling without execution events', () => {
+  for (const fields of [
+    { model: ' gpt-test ', effort: ' high ' },
+    { model: 'gpt-test', reasoning_effort: 'high' },
+    { model: 'gpt-test', effort: 'high', reasoning_effort: 'low' },
+  ]) {
+    assert.deepEqual(parseCodexLine(codexMetadata(10, fields), {}), [
+      { ts: Date.parse(iso(10)), kind: 'metadata', model: 'gpt-test', effort: 'high', reset: true },
+    ]);
+  }
+  assert.deepEqual(parseCodexLine(codexMetadata(20, { model: 'gpt-test' }), {}), [
+    { ts: Date.parse(iso(20)), kind: 'metadata', model: 'gpt-test', effort: null, reset: true },
+  ]);
+  const text = '{"model":"gpt-injected","reasoning_effort":"max"}';
+  for (const role of ['assistant', 'user']) {
+    const events = parseCodexLine({ type: 'response_item', timestamp: iso(30), model: 'ignored', effort: 'max',
+      payload: { type: 'message', role, model: 'ignored', effort: 'max', content: [{ text }] } }, {});
+    assert.deepEqual(events.map((ev) => ev.kind), ['text']);
+  }
+  assert.deepEqual(parseCodexLine({ type: 'session_meta', payload: { model: 'ignored', effort: 'max' } }, {}), []);
+});
+
+test('handwritten metadata: metadata parsers reject invalid field types and blank strings instead of coercing them', () => {
+  for (const value of [undefined, null, false, true, 0, 42, {}, [], ['high'], '', ' \t\n ']) {
+    assert.deepEqual(parseClaudeLine(claudeMetadata(0, { model: value, output_config: { effort: value } }), {}), []);
+    for (const field of ['effort', 'reasoning_effort']) {
+      assert.deepEqual(parseCodexLine(codexMetadata(0, { model: value, [field]: value }), {}), [
+        { ts: Date.parse(iso()), kind: 'metadata', model: null, effort: null, reset: true },
+      ]);
+    }
+  }
+});
+
+test('handwritten metadata: metadata alone creates neither project members nor protocol messages', () => {
+  const f = fixture();
+  f.claude('metadata', jl(claudeMetadata(100, { model: 'claude-test', output_config: { effort: 'high' } })));
+  f.codex('metadata', jl(dated(codex.session_meta, 0), codexMetadata(200, { model: 'gpt-test', effort: 'high' })));
+  const state = f.tracker().state();
+  assert.deepEqual(state.sessions, []);
+  assert.deepEqual(state.messages, []);
+});
+
+test('handwritten metadata: metadata updates do not advance activity, clear pending tools or change membership', () => {
+  for (const client of ['claude', 'codex']) {
+    const f = fixture();
+    f[client]('worker', client === 'claude'
+      ? jl(claudeSend('metadata-worker', 0, 'join', 'P:wms T:JOIN_REQUEST ID:join FROM:worker'))
+      : jl(dated(codex.session_meta, 0), dated(codex.send, 0), dated(codex.task_started, 10), dated(codex.custom_tool_call, 20)));
+    const tracker = f.tracker(), before = tracker.state();
+    assert.equal(before.sessions[0].exec, 'RUNNING');
+    const file = client === 'claude' ? path.join(f.claudeDir, 'proj', 'worker.jsonl')
+      : path.join(f.codexDir, '2026', '10', '17', 'rollout-worker.jsonl');
+    fs.appendFileSync(file, jl(client === 'claude'
+      ? claudeMetadata(100, { model: 'claude-test', output_config: { effort: 'high' } })
+      : codexMetadata(100, { model: 'gpt-test', reasoning_effort: 'high' })));
+    const after = tracker.state(), session = after.sessions[0];
+    assert.deepEqual(session, { ...before.sessions[0], model: client === 'claude' ? 'claude-test' : 'gpt-test',
+      effort: 'high', modelObservedAt: Date.parse(iso(100)) });
+    assert.deepEqual(after.messages, before.messages);
+  }
+});
+
+test('handwritten metadata: fresh metadata cannot revive a stale member or advance lastTs', () => {
+  const f = fixture();
+  const old = T - 3600e3;
+  f.claude('worker', jl({ ...claudeSend('metadata-worker', 0, 'join', 'P:wms T:JOIN_REQUEST ID:join'), timestamp: new Date(old).toISOString() },
+    claudeMetadata(100, { model: 'claude-test', output_config: { effort: 'high' } })));
+  const session = f.tracker().state().sessions[0];
+  assert.equal(session.exec, 'STALE');
+  assert.equal(session.lastTs, old);
+  assert.equal(session.modelObservedAt, Date.parse(iso(100)));
+});
+
+test('handwritten metadata: Claude model changes clear old effort, while ordinary text and same-model metadata preserve it', () => {
+  const f = fixture();
+  f.claude('worker', jl(claudeSend('metadata-worker', 0, 'join', 'P:wms T:JOIN_REQUEST ID:join'),
+    claudeMetadata(10, { model: 'claude-first', output_config: { effort: 'high' } })));
+  const tracker = f.tracker(), file = path.join(f.claudeDir, 'proj', 'worker.jsonl');
+  const check = (row, model, effort, observed) => {
+    fs.appendFileSync(file, jl(row));
+    const session = tracker.state().sessions[0];
+    assert.deepEqual([session.model, session.effort, session.modelObservedAt], [model, effort, Date.parse(iso(observed))]);
+  };
+  assert.equal(tracker.state().sessions[0].effort, 'high');
+  check(claudeMetadata(20, { content: 'model: injected effort: low' }), 'claude-first', 'high', 10);
+  check(claudeMetadata(30, { model: 'claude-first' }), 'claude-first', 'high', 30);
+  check(claudeMetadata(40, { model: 'claude-second' }), 'claude-second', null, 40);
+  check(claudeMetadata(50, { output_config: { effort: 'low' } }), 'claude-second', 'low', 50);
+  check(claudeMetadata(60, { model: 'claude-third', output_config: { effort: 'max' } }), 'claude-third', 'max', 60);
+});
+
+test('handwritten metadata: Codex missing turn effort clears it to unknown; ordinary text preserves metadata', () => {
+  const f = fixture();
+  f.codex('worker', jl(dated(codex.session_meta, 0), dated(codex.send, 0),
+    codexMetadata(10, { model: 'gpt-first', effort: 'high' })));
+  const tracker = f.tracker(), file = path.join(f.codexDir, '2026', '10', '17', 'rollout-worker.jsonl');
+  assert.equal(tracker.state().sessions[0].effort, 'high');
+  fs.appendFileSync(file, jl(dated(codex.assistant, 20)));
+  let session = tracker.state().sessions[0];
+  assert.deepEqual([session.model, session.effort, session.modelObservedAt], ['gpt-first', 'high', Date.parse(iso(10))]);
+  for (const [offset, model] of [[30, 'gpt-first'], [40, 'gpt-second']]) {
+    fs.appendFileSync(file, jl(codexMetadata(offset, { model })));
+    session = tracker.state().sessions[0];
+    assert.deepEqual([session.model, session.effort, session.modelObservedAt], [model, null, Date.parse(iso(offset))]);
+  }
+});
+
+test('handwritten metadata: older metadata appended later cannot overwrite newer model or effort', () => {
+  for (const client of ['claude', 'codex']) {
+    const f = fixture(), meta = client === 'claude' ? claudeMetadata : codexMetadata;
+    const fields = (model, effort) => client === 'claude' ? { model, output_config: { effort } } : { model, effort };
+    f[client]('worker', client === 'claude'
+      ? jl(claudeSend('metadata-worker', 0, 'join', 'P:wms T:JOIN_REQUEST ID:join'), meta(100, fields('new-model', 'high')))
+      : jl(dated(codex.session_meta, 0), dated(codex.send, 0), meta(100, fields('new-model', 'high'))));
+    const tracker = f.tracker(), before = tracker.state().sessions[0];
+    const file = client === 'claude' ? path.join(f.claudeDir, 'proj', 'worker.jsonl')
+      : path.join(f.codexDir, '2026', '10', '17', 'rollout-worker.jsonl');
+    fs.appendFileSync(file, jl(meta(50, fields('old-model', 'low')), meta(60, fields('older-without-effort'))));
+    assert.deepEqual(tracker.state().sessions[0], before);
+  }
+});
+
+test('handwritten metadata: split files select newest metadata independently of the execution snapshot and file order', () => {
+  for (const client of ['claude', 'codex']) {
+    for (const names of [['a', 'z'], ['z', 'a']]) {
+      const f = fixture();
+      if (client === 'claude') {
+        f.claude(names[0], jl(claudeSend('metadata-worker', 0, 'join', 'P:wms T:JOIN_REQUEST ID:join'), claudeResult('metadata-worker', 5, 'join'),
+          claudeMetadata(10, { model: 'old-model', output_config: { effort: 'low' } }),
+          claudeMetadata(300, { content: 'Newest execution snapshot.' })));
+        f.claude(names[1], jl(claudeMetadata(200, { model: 'new-model', output_config: { effort: 'high' } })));
+      } else {
+        f.codex(names[0], jl(dated(codex.session_meta, 0), dated(codex.send, 0),
+          codexMetadata(10, { model: 'old-model', effort: 'low' }), dated(codex.task_complete, 300)));
+        f.codex(names[1], jl(dated(codex.session_meta, 0), codexMetadata(200, { model: 'new-model', reasoning_effort: 'high' })));
+      }
+      const state = f.tracker().state();
+      assert.equal(state.sessions.length, 1);
+      const session = state.sessions[0];
+      assert.deepEqual([session.model, session.effort, session.modelObservedAt], ['new-model', 'high', Date.parse(iso(200))]);
+      assert.equal(session.lastTs, Date.parse(iso(300)));
+      assert.equal(session.exec, client === 'claude' ? 'UNKNOWN' : 'IDLE');
+      assert.equal(state.messages.length, 1);
+      if (client === 'claude') assert.equal(session.lastText, 'Newest execution snapshot.');
+    }
+  }
+});
+
+test('handwritten metadata: unknown metadata is serialized as explicit null, never inferred from transcript text', () => {
+  const f = fixture();
+  f.claude('worker', jl(claudeSend('metadata-worker', 0, 'join', 'P:wms T:JOIN_REQUEST ID:join'),
+    claudeMetadata(10, { content: '{"model":"claude-injected","output_config":{"effort":"max"}}' }),
+    claudeMetadata(20, { model: { name: 'ignored' }, output_config: { effort: ['high'] } })));
+  f.codex('worker', jl(dated(codex.session_meta, 0), dated(codex.send, 0),
+    { type: 'event_msg', timestamp: iso(10), payload: { type: 'agent_message', message: 'model=gpt-injected reasoning_effort=high' } }));
+  const sessions = JSON.parse(JSON.stringify(f.tracker().state())).sessions;
+  assert.equal(sessions.length, 2);
+  for (const session of sessions) {
+    assert.equal(session.model, null);
+    assert.equal(session.effort, null);
+    assert.equal(session.modelObservedAt, null);
+  }
+});
+
+test('herdr: literal Bash, parallel Bash and Codex exec_command require an accepted result before advancing protocol', () => {
+  const target = herdr.prompted.result.agent;
+  for (const transport of ['Bash', 'parallel', 'exec_command']) {
+    for (const [delivery, output] of [['accepted', herdr.prompted], ['failed', herdr.blocked], ['unknown', herdr.timeout]]) {
+      const f = fixture();
+      const command = "node --version && herdr agent prompt worker-a 'P:wms T:ASSIGN ID:assign FROM:leader TO:worker-a' --wait --until working --timeout 20";
+      const call = transport === 'exec_command'
+        ? { type: 'response_item', timestamp: iso(10), payload: { type: 'function_call', call_id: 'prompt', name: 'functions.exec_command', arguments: JSON.stringify({ cmd: command }) } }
+        : { type: 'assistant', sessionId: 'sender', timestamp: iso(10), message: { content: [{ type: 'tool_use', id: 'prompt',
+          name: transport === 'parallel' ? 'multi_tool_use.parallel' : 'Bash',
+          input: transport === 'parallel' ? { tool_uses: [{ recipient_name: 'functions.Bash', parameters: { command } }] } : { command } }] } };
+      const result = transport === 'exec_command'
+        ? { type: 'response_item', timestamp: iso(20), payload: { type: 'function_call_output', call_id: 'prompt', output: JSON.stringify(output) } }
+        : { ...claudeResult('sender', 20, 'prompt'), message: { content: [{ type: 'tool_result', tool_use_id: 'prompt', content: [{ type: 'text', text: JSON.stringify(output) }] }] } };
+      f.claude('worker', jl(claudeSend(target.agent_session.value, 0, 'join', 'P:wms T:JOIN_REQUEST ID:join FROM:worker-a')));
+      const client = transport === 'exec_command' ? 'codex' : 'claude';
+      const rows = client === 'codex' ? [{ type: 'session_meta', payload: { id: 'sender' } }, call] : [call];
+      f[client]('sender', jl(...rows));
+      const tracker = f.tracker();
+      const pending = tracker.state();
+      assert.equal(pending.messages.find((m) => m.id === 'assign').delivery, 'pending');
+      assert.equal(pending.sessions.find((s) => s.id === 'claude:' + target.agent_session.value).proto, 'JOINING');
+      f[client]('sender', jl(...rows, result));
+      const state = tracker.state(), assignment = state.messages.find((m) => m.id === 'assign');
+      assert.equal(assignment.transport, 'herdr');
+      assert.equal(assignment.delivery, delivery);
+      assert.equal(state.sessions.find((s) => s.id === 'claude:' + target.agent_session.value).proto, delivery === 'accepted' ? 'ASSIGNED' : 'JOINING');
+      assert.equal(state.sessions.some((s) => s.id === client + ':sender'), delivery === 'accepted');
+      if (delivery === 'accepted') assert.equal(assignment.to, 'claude:' + target.agent_session.value);
+    }
+  }
+});
+
+test('herdr: failed, unknown and pending attempts alone cannot discover a project or create members', () => {
+  for (const output of [null, herdr.blocked, herdr.timeout, { result: { type: 'agent_prompted', agent: { ...herdr.prompted.result.agent, name: 'wrong-target' } } }]) {
+    const f = fixture();
+    const call = claudeSend('sender', 0, 'prompt', 'unused');
+    call.message.content[0] = { type: 'tool_use', id: 'prompt', name: 'Bash', input: {
+      command: "herdr agent prompt worker-a 'P:attempt-only T:ASSIGN ID:assign FROM:leader'",
+    } };
+    const rows = [call];
+    if (output) rows.push({ ...claudeResult('sender', 10, 'prompt'), message: { content: [{ type: 'tool_result', tool_use_id: 'prompt', content: JSON.stringify(output) }] } });
+    f.claude('sender', jl(...rows));
+    const state = f.tracker(undefined).state('attempt-only');
+    assert.deepEqual(state.availableProjects, []);
+    assert.deepEqual(state.sessions, []);
+    assert.equal(state.messages.length, 1);
+    assert.notEqual(state.messages[0].delivery, 'accepted');
+  }
+});
+
+test('herdr registry overrides execution by exact client and full session, with its own source timestamp', () => {
+  const f = fixture();
+  f.claude('worker', jl(claudeSend('full-worker-session', 0, 'join', 'P:wms T:JOIN_REQUEST ID:join FROM:worker-a'),
+    claudeResult('full-worker-session', 10, 'join')));
+  const snapshot = { status: 'ok', observedAt: T - 1000, agents: [] };
+  const tracker = f.tracker('wms', { herdrObserver: { snapshot: () => structuredClone(snapshot) } });
+  const agent = { client: 'claude', session: 'full-worker-session', name: 'registry-name', status: 'working' };
+  for (const status of ['working', 'idle', 'done', 'blocked']) {
+    snapshot.agents = [{ ...agent, status }, { ...agent, session: 'registry-only', name: 'extra' }];
+    const state = tracker.state(), worker = state.sessions[0];
+    assert.equal(state.sessions.length, 1, 'the registry cannot create project membership');
+    assert.equal(worker.name, 'registry-name');
+    assert.equal(worker.workerId, 'worker-a');
+    assert.equal(worker.exec, { working: 'RUNNING', idle: 'IDLE', done: 'IDLE', blocked: 'BLOCKED' }[status]);
+    assert.equal(worker.proto, 'JOINING', 'done is execution evidence, not protocol COMPLETE');
+    assert.equal(worker.execSource, 'herdr-observed');
+    assert.equal(worker.execObservedAt, snapshot.observedAt);
+    assert.equal(worker.lastTs, Date.parse(iso(10)));
+    assert.deepEqual(state.observation, { source: 'herdr', status: 'ok', observedAt: snapshot.observedAt, error: null });
+  }
+  for (const agents of [
+    [{ ...agent, session: 'full-worker' }], [{ ...agent, session: 'full-worker-session-extra' }],
+    [{ ...agent, client: 'codex' }], [{ ...agent, session: 'other', name: 'worker-a' }],
+    [agent, agent], [{ ...agent, status: 'unknown' }],
+  ]) {
+    snapshot.agents = agents;
+    const worker = tracker.state().sessions[0];
+    assert.equal(worker.exec, 'UNKNOWN');
+    assert.equal(worker.execSource, 'transcript-inferred');
+    assert.equal(worker.execObservedAt, Date.parse(iso(10)));
+  }
+  snapshot.agents = [agent];
+  snapshot.observedAt = T - 11000;
+  assert.equal(tracker.state().sessions[0].execSource, 'transcript-inferred', 'expired snapshots cannot claim current execution');
+  snapshot.observedAt = T + 1;
+  assert.equal(tracker.state().sessions[0].execSource, 'transcript-inferred', 'future snapshots cannot claim current execution');
+  snapshot.status = 'unavailable';
+  snapshot.error = 'fixture: registry offline';
+  snapshot.agents = [agent];
+  const state = tracker.state();
+  assert.equal(state.sessions[0].exec, 'UNKNOWN');
+  assert.equal(state.sessions[0].execSource, 'transcript-inferred');
+  assert.equal(state.observation.status, 'unavailable');
+  assert.equal(state.observation.error, snapshot.error);
+});
+
+test('execution without pending tools or explicit active/end turn evidence stays UNKNOWN after results', () => {
+  const f = fixture();
+  f.claude('worker', jl(claudeSend('claude-worker', 0, 'join', 'P:wms T:JOIN_REQUEST ID:cl'), claudeResult('claude-worker', 10, 'join')));
+  f.codex('worker', jl(dated(codex.session_meta, 0), dated(codex.send, 0), dated(codex.send_output, 10)));
+  const state = f.tracker().state();
+  assert.equal(state.sessions.length, 2);
+  for (const session of state.sessions) {
+    assert.equal(session.exec, 'UNKNOWN');
+    assert.equal(session.execSource, 'transcript-inferred');
+  }
+  assert.equal(state.observation.status, 'unavailable');
+});
+
+test('since: event timestamps exclude old and future messages and project discovery despite fresh file mtimes', () => {
+  const f = fixture();
+  f.claude('worker', jl(
+    claudeSend('worker', -10000, 'old', 'P:old-only T:PING ID:old'),
+    claudeSend('worker', -5000, 'boundary', 'P:wms T:PING ID:boundary'),
+    claudeSend('worker', 0, 'fresh', 'P:wms T:PING ID:fresh'),
+    claudeSend('worker', 6000, 'future', 'P:future-only T:PING ID:future'),
+  ));
+  f.codex('old', jl(dated(codex.session_meta, -10000), dated(codex.send, -10000)));
+  for (const file of [path.join(f.claudeDir, 'proj', 'worker.jsonl'), path.join(f.codexDir, '2026', '10', '17', 'rollout-old.jsonl')]) {
+    fs.utimesSync(file, new Date(T), new Date(T));
+  }
+  const state = f.tracker('wms', { sinceMs: 10000 }).state();
+  assert.deepEqual(state.availableProjects, [{ project: 'wms', lastActivity: Date.parse(iso()) }]);
+  assert.deepEqual(state.messages.map((m) => m.id), ['boundary', 'fresh']);
+  assert.deepEqual(state.sessions.map((s) => s.id), ['claude:worker']);
+  const old = f.tracker('old-only', { sinceMs: 10000 }).state();
+  assert.deepEqual(old.sessions, []);
+  assert.deepEqual(old.messages, []);
+});
+
+test('since: historical LEFT baseline survives the window cutoff and late messages cannot revive a member', () => {
+  const f = fixture();
+  f.claude('worker', jl(
+    claudeSend('worker', -20000, 'leave', 'P:wms T:LEAVE_REQUEST ID:leave FROM:worker'),
+    claudeSend('worker', 0, 'complete', 'P:wms T:COMPLETE ID:late-complete FROM:worker'),
+  ));
+  f.claude('leader', jl(
+    claudeSend('leader', -19000, 'joined', 'P:wms T:JOIN_ACK ID:joined FROM:leader', 'worker'),
+    claudeSend('leader', -18000, 'left', 'P:wms T:LEAVE_ACK ID:left RE:leave FROM:leader', 'worker'),
+    claudeSend('leader', 10, 'assign', 'P:wms T:ASSIGN ID:late-assign FROM:leader', 'worker'),
+  ));
+  const state = f.tracker('wms', { sinceMs: 10000 }).state();
+  assert.deepEqual(state.messages.map((m) => m.id), ['late-complete', 'late-assign']);
+  const worker = state.sessions.find((s) => s.id === 'claude:worker');
+  assert.deepEqual([worker.membership, worker.proto], ['LEFT', 'LEFT']);
+  assert.equal(state.sessions.find((s) => s.id === 'claude:leader').role, 'Leader');
 });
 
 test('parseEnvelope reads compact and YAML forms', () => {
@@ -61,12 +398,78 @@ test('Claude: sender with a pending Bash call is a RUNNING Worker in JOINING', (
   assert.equal(st.messages[0].type, 'JOIN_REQUEST');
 });
 
-test('LEAVE_REQUEST then LEAVE_ACK marks the Worker LEFT', () => {
+test('LEAVE_REQUEST alone keeps the Worker active while leaving', () => {
   const f = fixture();
   f.claude('w1', jl(claudeSend('w1', 0, 'u1', 'P:wms T:LEAVE_REQUEST ID:lv1 FROM:fe-01 REF:branch')));
-  f.claude('l1', jl(claudeSend('l1', 100, 'u2', 'P:wms T:LEAVE_ACK ID:la1 RE:lv1', 'fe-01')));
   const st = f.tracker().state();
-  assert.equal(st.sessions.find((s) => s.name === 'fe-01').proto, 'LEFT');
+  assert.equal(st.sessions.length, 1);
+  assert.deepEqual([st.sessions[0].membership, st.sessions[0].proto], ['ACTIVE', 'LEAVING']);
+  assert.deepEqual(st.messages.map((m) => m.id), ['lv1']);
+});
+
+test('Leader LEAVE_ACK retires the requesting Worker and keeps the Leader active, with or without RE', () => {
+  for (const reply of [' RE:lv1', '']) {
+    const f = fixture();
+    f.claude('w1', jl(claudeSend('w1', 0, 'u1', 'P:wms T:LEAVE_REQUEST ID:lv1 FROM:fe-01 REF:branch')));
+    f.claude('l1', jl(
+      claudeSend('l1', 50, 'u0', 'P:wms T:JOIN_ACK ID:join-ack FROM:leader', 'fe-01'),
+      claudeSend('l1', 100, 'u2', 'P:wms T:LEAVE_ACK ID:la1' + reply, 'fe-01'),
+    ));
+    const st = f.tracker().state();
+    const worker = st.sessions.find((s) => s.id === 'claude:w1');
+    const leader = st.sessions.find((s) => s.id === 'claude:l1');
+    assert.deepEqual([worker.membership, worker.proto], ['LEFT', 'LEFT'], reply);
+    assert.deepEqual([leader.role, leader.membership, leader.proto], ['Leader', 'ACTIVE', 'COORDINATING'], reply);
+    assert.deepEqual(st.messages.map((m) => m.id), ['lv1', 'join-ack', 'la1']);
+    assert.equal(st.messages[2].to, worker.id);
+  }
+});
+
+test('Worker LEAVE_ACK for RELEASE retires the sender and keeps the Leader active, with or without RE', () => {
+  for (const reply of [' RE:release', '']) {
+    const f = fixture();
+    f.claude('l1', jl(claudeSend('l1', 50, 'u2', 'P:wms T:RELEASE ID:release FROM:leader', 'fe-01')));
+    f.claude('w1', jl(
+      claudeSend('w1', 0, 'u1', 'P:wms T:JOIN_REQUEST ID:join FROM:fe-01'),
+      claudeSend('w1', 100, 'u3', 'P:wms T:LEAVE_ACK ID:la1' + reply),
+    ));
+    const st = f.tracker().state();
+    const worker = st.sessions.find((s) => s.id === 'claude:w1');
+    const leader = st.sessions.find((s) => s.id === 'claude:l1');
+    assert.deepEqual([worker.membership, worker.proto], ['LEFT', 'LEFT'], reply);
+    assert.deepEqual([leader.role, leader.membership, leader.proto], ['Leader', 'ACTIVE', 'COORDINATING'], reply);
+    assert.deepEqual(st.messages.map((m) => m.id), ['join', 'release', 'la1']);
+    assert.equal(st.messages[2].to, leader.id);
+  }
+});
+
+test('late COMPLETE and ASSIGN cannot revive a departed Worker; a new JOIN_REQUEST can', () => {
+  const f = fixture();
+  f.claude('w1', jl(claudeSend('w1', 0, 'u1', 'P:wms T:LEAVE_REQUEST ID:lv1 FROM:fe-01')));
+  f.claude('l1', jl(claudeSend('l1', 100, 'u2', 'P:wms T:LEAVE_ACK ID:la1 RE:lv1 FROM:leader', 'fe-01')));
+  const tracker = f.tracker();
+  const worker = (st) => st.sessions.find((s) => s.id === 'claude:w1');
+  const initial = tracker.state();
+  assert.deepEqual([worker(initial).membership, worker(initial).proto], ['LEFT', 'LEFT']);
+  for (const [file, row] of [
+    ['w1', claudeSend('w1', 200, 'u3', 'P:wms T:COMPLETE ID:late-complete')],
+    ['l1', claudeSend('l1', 300, 'u4', 'P:wms T:ASSIGN ID:late-assign', 'fe-01')],
+  ]) {
+    fs.appendFileSync(path.join(f.claudeDir, 'proj', file + '.jsonl'), jl(row));
+    const st = tracker.state();
+    assert.deepEqual([worker(st).membership, worker(st).proto], ['LEFT', 'LEFT'], row.message.content[0].input.message);
+    assert.equal(st.sessions.length, 2, 'departed sessions remain in history');
+  }
+  const departed = tracker.state();
+  assert.deepEqual(departed.messages.map((m) => m.id), ['lv1', 'la1', 'late-complete', 'late-assign']);
+  fs.appendFileSync(path.join(f.claudeDir, 'proj', 'w1.jsonl'), jl(
+    claudeSend('w1', 400, 'u5', 'P:wms T:JOIN_REQUEST ID:rejoin FROM:fe-01'),
+  ));
+  const joined = tracker.state();
+  assert.deepEqual([worker(joined).membership, worker(joined).proto], ['ACTIVE', 'JOINING']);
+  assert.equal(joined.sessions.length, 2);
+  assert.deepEqual(joined.messages.slice(0, -1), departed.messages);
+  assert.equal(joined.messages.at(-1).id, 'rejoin');
 });
 
 test('Codex: tool call + output + task_complete is IDLE; send_message_to_thread envelope is recognised', () => {
@@ -175,7 +578,7 @@ test('split session files retain messages and use the newest state regardless of
     f.claude(names[1], jl({ type: 'assistant', sessionId: 'split', timestamp: iso(100), message: { content: 'Finished.' } }));
     const st = f.tracker().state();
     assert.equal(st.sessions.length, 1);
-    assert.equal(st.sessions[0].exec, 'IDLE');
+    assert.equal(st.sessions[0].exec, 'UNKNOWN');
     assert.equal(st.sessions[0].lastText, 'Finished.');
     assert.equal(st.messages[0].id, 'old');
   }
@@ -189,6 +592,154 @@ test('duplicate IDs collapse; other projects are ignored', () => {
     claudeSend('s3', 20, 'u3', 'P:other T:PING ID:o1 FROM:a'),
   ));
   assert.equal(f.tracker().state().messages.length, 1);
+});
+
+test('teams: discovery uses sent and received envelopes, sorted by latest protocol activity', () => {
+  const f = fixture();
+  f.claude('sender', jl(
+    claudeSend('sender', 0, 'a', 'P:alpha T:PING ID:a'),
+    claudeSend('sender', 100, 'b', 'P:beta T:PING ID:b'),
+    claudeSend('sender', 100, 'c', 'P:charlie T:PING ID:c'),
+    claudeMetadata(400, { content: 'P:example T:PING ID:not-a-message' }),
+  ));
+  f.claude('receiver', jl({ ...dated(claude.user, 200), message: {
+    ...claude.user.message, content: claude.user.message.content.replace('P:wms', 'P:received-only'),
+  } }));
+  const tracker = f.tracker();
+  const auto = createTracker({ claudeDir: f.claudeDir, codexDir: f.codexDir, now: () => T, herdrObserver: unavailableObserver });
+  const state = auto.state();
+  assert.deepEqual(state.availableProjects, [
+    { project: 'received-only', lastActivity: Date.parse(iso(200)) },
+    { project: 'beta', lastActivity: Date.parse(iso(100)) },
+    { project: 'charlie', lastActivity: Date.parse(iso(100)) },
+    { project: 'alpha', lastActivity: Date.parse(iso()) },
+  ]);
+  assert.equal(state.project, 'received-only');
+  assert.equal(state.sessions.length, 1);
+  assert.equal(state.sessions[0].id, 'claude:claude-leader');
+  assert.equal(tracker.state().project, 'wms', 'an explicit default wins over latest activity');
+  assert.equal(tracker.state('alpha').project, 'alpha', 'per-request selection wins over the default');
+});
+
+test('teams: no activity stays empty and explicit teams need not be discovered', () => {
+  const f = fixture();
+  f.claude('metadata', jl(claudeMetadata(0, { model: 'test-model' })));
+  const tracker = createTracker({ claudeDir: f.claudeDir, codexDir: f.codexDir, now: () => T, herdrObserver: unavailableObserver });
+  const state = tracker.state();
+  assert.equal(state.project, null);
+  assert.deepEqual(state.availableProjects, []);
+  assert.deepEqual(state.sessions, []);
+  assert.deepEqual(state.messages, []);
+  assert.equal(state.ledger.status, 'unavailable');
+  for (const selected of [tracker.state('unknown'), f.tracker('default-team').state()]) {
+    assert.ok(selected.project);
+    assert.deepEqual(selected.availableProjects, []);
+    assert.deepEqual(selected.sessions, []);
+    assert.deepEqual(selected.messages, []);
+  }
+});
+
+test('teams: alternating selections isolate membership, routes and identical sender/message IDs', () => {
+  const f = fixture();
+  f.claude('worker', jl(
+    claudeSend('worker', 0, 'a', 'P:alpha T:JOIN_REQUEST ID:shared FROM:worker'),
+    claudeSend('worker', 10, 'b', 'P:beta T:JOIN_REQUEST ID:shared FROM:worker'),
+  ));
+  f.claude('alpha-leader', jl(
+    claudeSend('alpha-leader', 20, 'c', 'P:alpha T:JOIN_ACK ID:ack FROM:leader', 'worker'),
+    claudeSend('alpha-leader', 30, 'd', 'P:alpha T:LEAVE_ACK ID:left FROM:leader', 'worker'),
+  ));
+  f.claude('beta-leader', jl(
+    claudeSend('beta-leader', 20, 'e', 'P:beta T:ASSIGN ID:ack FROM:leader', 'worker'),
+  ));
+  const tracker = f.tracker('alpha');
+  const alpha = tracker.state(), beta = tracker.state('beta');
+  assert.deepEqual(alpha.sessions.map((s) => s.id).sort(), ['claude:alpha-leader', 'claude:worker']);
+  assert.deepEqual(beta.sessions.map((s) => s.id).sort(), ['claude:beta-leader', 'claude:worker']);
+  assert.equal(alpha.sessions.find((s) => s.id === 'claude:worker').membership, 'LEFT');
+  assert.equal(beta.sessions.find((s) => s.id === 'claude:worker').membership, 'ACTIVE');
+  assert.equal(beta.sessions.find((s) => s.id === 'claude:worker').proto, 'ASSIGNED');
+  assert.deepEqual(alpha.messages.map((m) => m.id), ['shared', 'ack', 'left']);
+  assert.deepEqual(beta.messages.map((m) => m.id), ['shared', 'ack']);
+  assert.equal(alpha.messages[0].to, 'claude:alpha-leader');
+  assert.equal(beta.messages[0].to, 'claude:beta-leader');
+  for (const team of ['alpha', 'beta', 'alpha', 'beta']) {
+    assert.deepEqual(tracker.state(team), team === 'alpha' ? alpha : beta);
+  }
+  assert.deepEqual(tracker.state(), alpha, 'requests do not mutate the configured default');
+});
+
+test('teams: incremental append and new files discover teams without rebuilding the tracker', () => {
+  const f = fixture();
+  f.claude('worker', jl(claudeSend('worker', 0, 'a', 'P:alpha T:PING ID:a')));
+  const tracker = createTracker({ claudeDir: f.claudeDir, codexDir: f.codexDir, now: () => T, herdrObserver: unavailableObserver });
+  const alpha = tracker.state();
+  fs.appendFileSync(path.join(f.claudeDir, 'proj', 'worker.jsonl'), jl(
+    claudeSend('worker', 100, 'b', 'P:beta T:PING ID:b'),
+  ));
+  assert.equal(tracker.state().project, 'beta');
+  f.codex('new', jl(dated(codex.session_meta, 0), { ...dated(codex.send, 200), payload: {
+    ...codex.send.payload, arguments: JSON.stringify({ threadId: 'leader', prompt: 'P:gamma T:JOIN_REQUEST ID:g' }),
+  } }));
+  const latest = tracker.state();
+  assert.equal(latest.project, 'gamma');
+  assert.deepEqual(latest.availableProjects.map((p) => p.project), ['gamma', 'beta', 'alpha']);
+  assert.deepEqual(latest.messages.map((m) => m.id), ['g']);
+  const selectedAlpha = tracker.state('alpha');
+  assert.deepEqual(selectedAlpha.sessions.map((s) => [s.id, s.membership, s.proto]),
+    alpha.sessions.map((s) => [s.id, s.membership, s.proto]));
+  assert.deepEqual(selectedAlpha.messages, alpha.messages);
+});
+
+test('teams: ledger directories require one explicit binding and cannot be combined with a repository', () => {
+  const f = fixture();
+  const ledgerDir = fileURLToPath(new URL('./fixtures/team-dashboard/ledger/', import.meta.url));
+  const options = { claudeDir: f.claudeDir, codexDir: f.codexDir, ledgerDir, now: () => T, herdrObserver: unavailableObserver };
+  assert.throws(() => createTracker(options), /--ledger-dir requires --project/);
+  assert.throws(() => createTracker({ ...options, project: 'wms', ledgerRepo: '.' }), /mutually exclusive/);
+  f.claude('other', jl(claudeSend('other', 0, 'a', 'P:other T:PING ID:other')));
+  const tracker = createTracker({ ...options, project: 'wms' });
+  assert.equal(tracker.state().ledger.status, 'ok');
+  const other = tracker.state('other');
+  assert.equal(other.ledger.status, 'unavailable');
+  assert.deepEqual(other.ledger.tasks, []);
+  assert.deepEqual(other.ledger.diagnostics, []);
+  assert.match(other.ledger.error, /wms/);
+  assert.deepEqual(other.messages.map((m) => m.id), ['other']);
+  assert.equal(tracker.state('missing').ledger.status, 'unavailable');
+  assert.equal(tracker.state().ledger.status, 'ok', 'switching back restores the bound directory');
+});
+
+test('HTTP team queries are independent, allow undiscovered teams and reject invalid selections', async () => {
+  const f = fixture();
+  f.claude('alpha', jl(claudeSend('alpha', 0, 'a', 'P:alpha T:PING ID:a')));
+  f.claude('beta', jl(claudeSend('beta', 100, 'b', 'P:beta T:PING ID:b')));
+  const server = createServer(f.tracker('alpha'));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}/api/state`;
+  const get = async (query = '') => {
+    const response = await fetch(url + query);
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  try {
+    const [beta, alpha, empty] = await Promise.all([get('?project=beta'), get(), get('?project=missing')]);
+    assert.equal(beta.project, 'beta');
+    assert.deepEqual(beta.messages.map((m) => m.id), ['b']);
+    assert.equal(alpha.project, 'alpha');
+    assert.deepEqual(alpha.messages.map((m) => m.id), ['a']);
+    assert.equal(empty.project, 'missing');
+    assert.deepEqual(empty.sessions, []);
+    assert.deepEqual(empty.messages, []);
+    assert.deepEqual((await get()).messages, alpha.messages);
+    for (const invalid of ['', '\0', '\n', '\x1f', '\x7f', 'x'.repeat(201)]) {
+      const response = await fetch(url + '?project=' + encodeURIComponent(invalid));
+      assert.equal(response.status, 400, JSON.stringify(invalid));
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      assert.match((await response.json()).error, /Invalid team name/);
+    }
+    assert.equal((await get('?project=' + 'x'.repeat(200))).project.length, 200);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
 test('incremental reads keep a partially written last line', () => {
@@ -213,7 +764,7 @@ test('tracker links ledgerDir fixture tasks only to exact client and full sessio
   const ledgerDir = fileURLToPath(new URL('./fixtures/team-dashboard/ledger/', import.meta.url));
   f.claude('worker', jl(claudeSend('claude-worker', 0, 'u1', 'P:wms T:JOIN_REQUEST ID:join FROM:backend-01')));
   f.codex('worker', jl(dated(codex.session_meta, 0), dated(codex.send, 20)));
-  const tracker = createTracker({ project: 'wms', claudeDir: f.claudeDir, codexDir: f.codexDir, ledgerDir, now: () => T });
+  const tracker = createTracker({ project: 'wms', claudeDir: f.claudeDir, codexDir: f.codexDir, ledgerDir, now: () => T, herdrObserver: unavailableObserver });
   const state = tracker.state();
   assert.equal(state.ledger.status, 'ok');
   assert.equal(state.ledger.source, 'directory');
@@ -241,7 +792,7 @@ test('HTTP API reports an unavailable ledger branch without affecting sessions',
   t.after(() => fs.rmSync(ledgerRepo, { recursive: true, force: true }));
   execFileSync('git', ['init', '--quiet', ledgerRepo]);
   f.claude('worker', jl(claudeSend('full-worker-session', 0, 'u1', 'P:wms T:JOIN_REQUEST ID:join FROM:backend-01')));
-  const tracker = createTracker({ project: 'wms', claudeDir: f.claudeDir, codexDir: f.codexDir, ledgerRepo, now: () => T });
+  const tracker = createTracker({ project: 'wms', claudeDir: f.claudeDir, codexDir: f.codexDir, ledgerRepo, now: () => T, herdrObserver: unavailableObserver });
   const expected = tracker.state();
   const server = createServer(tracker);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -307,8 +858,35 @@ test('server enforces Host guard and serves the dashboard with tested inline rul
     const start = script.indexOf('function esc('), end = script.indexOf('// DOM 与轮询状态。');
     assert.ok(start >= 0 && end > start, 'pure rules have an explicit boundary before DOM state');
     const context = { setTimeout, clearTimeout, setInterval, clearInterval, performance };
-    const rules = runInNewContext(vendor.body + '\n' + script.slice(start, end) + '; ({ d3, matchingMessages, counts, attentionSessions, avatar, esc, messageKey, newMessages, communicationGraph, forceLayout, curvePath, edgeType, edgeState, cardState })', context);
+    const rules = runInNewContext(vendor.body + '\n' + script.slice(start, end) + '; ({ d3, matchingMessages, activeSessions, counts, attentionSessions, avatar, esc, messageKey, newMessages, communicationGraph, forceLayout, curvePath, edgeType, edgeState, cardState, taskColumns })', context);
     assert.equal(rules.d3.version, '7.9.0');
+    await t.test('task board groups exact ledger statuses and retains unknown statuses', () => {
+      const tasks = [{ id: 'a', status: 'ASSIGNED' }, { id: 'b', status: 'DONE' }, { id: 'c', status: 'CUSTOM' }, { id: 'd', status: 'ASSIGNED' }];
+      const columns = rules.taskColumns(tasks);
+      assert.deepEqual(Array.from(columns, (c) => c.id), ['QUEUED', 'ASSIGNED', 'REVIEW_PENDING', 'PAUSED', 'DONE', 'STOPPED', 'CUSTOM']);
+      assert.deepEqual(Array.from(columns.find((c) => c.id === 'ASSIGNED').tasks, (t) => t.id), ['a', 'd']);
+      assert.equal(columns.reduce((n, c) => n + c.tasks.length, 0), tasks.length);
+      assert.equal(rules.taskColumns([]).length, 6);
+    });
+    await t.test('clearing graph focus resets both ledger selections without changing search or viewport', () => {
+      const start = script.indexOf('function clearGraphFocus('), end = script.indexOf("$('#clearGraphFocus').onclick", start);
+      let rendered = 0, highlighted = 'worker', focused = 0;
+      const state = { sessions: [], messages: [] };
+      const context = {
+        selectedTaskId: 'WP-17', ledgerWorkerId: 'worker', lastState: state,
+        renderLedger(st) { assert.equal(st, state); rendered++; },
+        highlightGraph(id) { highlighted = id; },
+        $(selector) { assert.equal(selector, '#liveScroll'); return { focus(options) { assert.equal(options.preventScroll, true); focused++; } }; },
+      };
+      const clear = runInNewContext(script.slice(start, end) + '; clearGraphFocus', context);
+      clear(); clear();
+      assert.equal(context.selectedTaskId, null);
+      assert.equal(context.ledgerWorkerId, null);
+      assert.equal(highlighted, null);
+      assert.equal(rendered, 2);
+      assert.equal(focused, 2);
+      assert.doesNotMatch(script.slice(start, end), /fitGraph|zoomBehavior|\.value\s*=/);
+    });
     await t.test('card appearance keeps blocked and stale visible without implying running work is complete', () => {
       for (const [exec, proto, expected] of [
         ['RUNNING', 'ASSIGNED', 'running'], ['IDLE', 'IN_REVIEW', 'review'],
@@ -352,6 +930,65 @@ test('server enforces Host guard and serves the dashboard with tested inline rul
       assert.deepEqual(Array.from(rules.attentionSessions(sessions), (s) => s.id), ['b', 'c', 'e']);
       assert.deepEqual({ ...rules.counts([]) }, { total: 0, running: 0, blocked: 0, stale: 0 });
       assert.deepEqual(Array.from(rules.attentionSessions([])), []);
+    });
+
+    await t.test('active sessions exclude membership and legacy protocol LEFT, preserving STALE and COMPLETE history', () => {
+      const sessions = [
+        { id: 'leaving', membership: 'ACTIVE', exec: 'RUNNING', proto: 'LEAVING' },
+        { id: 'stale', membership: 'ACTIVE', exec: 'STALE', proto: 'COMPLETE' },
+        { id: 'complete', exec: 'IDLE', proto: 'COMPLETE' },
+        { id: 'left', membership: 'LEFT', exec: 'RUNNING', proto: 'BLOCKED' },
+        { id: 'left-stale', membership: 'LEFT', exec: 'STALE', proto: 'COMPLETE' },
+        { id: 'legacy-left', exec: 'STALE', proto: 'LEFT' },
+      ];
+      const messages = sessions.map((s) => ({ id: s.id, from: s.id, to: 'leaving', type: 'COMPLETE' }));
+      const before = JSON.stringify({ sessions, messages });
+      const active = rules.activeSessions(sessions);
+      assert.deepEqual(Array.from(active, (s) => s.id), ['leaving', 'stale', 'complete']);
+      assert.equal(active[0], sessions[0]);
+      assert.deepEqual({ ...rules.counts(sessions) }, { total: 3, running: 1, blocked: 0, stale: 1 });
+      assert.deepEqual(Array.from(rules.attentionSessions(sessions), (s) => s.id), ['stale']);
+      assert.deepEqual(Array.from(rules.matchingMessages(messages, '', 'left', '')), [messages[3]]);
+      assert.deepEqual(Array.from(rules.matchingMessages(messages, '', '', '')), messages);
+      assert.equal(JSON.stringify({ sessions, messages }), before, 'display filters retain the full history');
+      assert.deepEqual(Array.from(rules.activeSessions([])), []);
+    });
+
+    await t.test('member rendering hides departed members and returns from empty on rejoin without mutating history', () => {
+      const renderStart = script.indexOf('function renderMembers('), renderEnd = script.indexOf('\nfunction renderAttention(', renderStart);
+      assert.ok(renderStart >= 0 && renderEnd > renderStart);
+      const elements = new Map(), text = new Map();
+      let rendered;
+      const context = {
+        scope: 'all', rows: new Map(),
+        activeSessions: rules.activeSessions,
+        $(selector) { if (!elements.has(selector)) elements.set(selector, {}); return elements.get(selector); },
+        setText(selector, value) { text.set(selector, value); },
+        keyed(container, rows, list) { rendered = Array.from(list, (s) => s.id); },
+      };
+      const renderMembers = runInNewContext(script.slice(start, end) + '\n' + script.slice(renderStart, renderEnd) + '; renderMembers', context);
+      const sessions = [
+        { id: 'worker', name: 'worker', membership: 'ACTIVE', proto: 'LEAVING' },
+        { id: 'legacy', name: 'legacy', proto: 'LEFT' },
+      ];
+      const state = { sessions, messages: [{ id: 'leave', from: 'worker', to: 'legacy' }] };
+      renderMembers(state);
+      assert.deepEqual(rendered, ['worker']);
+      assert.equal(text.get('#memberCount'), '1 / 1');
+      sessions[0].membership = 'LEFT';
+      renderMembers(state);
+      assert.deepEqual(rendered, []);
+      assert.equal(text.get('#memberCount'), '0 / 0');
+      assert.equal(elements.get('#membersEmpty').hidden, false);
+      assert.match(text.get('#membersEmpty'), /当前项目暂无团队活动/);
+      Object.assign(sessions[0], { membership: 'ACTIVE', proto: 'JOINING' });
+      renderMembers(state);
+      assert.deepEqual(rendered, ['worker']);
+      assert.equal(text.get('#memberCount'), '1 / 1');
+      assert.equal(elements.get('#membersEmpty').hidden, true);
+      assert.equal(state.sessions, sessions);
+      assert.equal(state.sessions.length, 2);
+      assert.equal(state.messages.length, 1);
     });
 
     await t.test('avatars map clients to project text marks and unknown clients to a safe fallback', () => {
@@ -449,6 +1086,44 @@ test('server enforces Host guard and serves the dashboard with tested inline rul
         assert.equal(peers.has(id), false);
         for (const peer of peers) assert.ok(graph.adj.get(peer).has(id));
       }
+    });
+
+    await t.test('departed members and incident edges disappear from previous graphs; all-left is empty and rejoin returns', () => {
+      const sessions = [
+        { id: 'a', membership: 'ACTIVE', exec: 'STALE', proto: 'COMPLETE' },
+        { id: 'b', membership: 'ACTIVE', exec: 'RUNNING', proto: 'LEAVING' },
+        { id: 'c', exec: 'IDLE', proto: 'COMPLETE' },
+      ];
+      const messages = completeLinks(sessions);
+      const history = JSON.stringify(messages);
+      const previous = rules.communicationGraph(sessions, messages);
+      const before = graphSnapshot(previous);
+      assert.deepEqual(Array.from(previous.order), ['a', 'b', 'c']);
+      assert.equal(previous.edges.size, 3);
+      const departed = sessions.map((s) => s.id === 'b' ? { ...s, membership: 'LEFT' } : s);
+      const graph = rules.communicationGraph(departed, messages, previous);
+      assert.deepEqual(Array.from(graph.order), ['a', 'c']);
+      assert.deepEqual(Array.from(graph.adj.keys()), ['a', 'c']);
+      assert.deepEqual(Array.from(graph.edges.keys()), ['["a","c"]']);
+      assert.deepEqual(Array.from(graph.adj.get('a')), ['c']);
+      assert.deepEqual(Array.from(graph.adj.get('c')), ['a']);
+      const allLeft = departed.map((s) => ({ ...s, membership: 'LEFT' }));
+      const empty = rules.communicationGraph(allLeft, messages, graph);
+      assert.deepEqual(Array.from(empty.order), []);
+      assert.equal(empty.adj.size, 0);
+      assert.equal(empty.edges.size, 0);
+      assert.deepEqual({ ...rules.counts(allLeft) }, { total: 0, running: 0, blocked: 0, stale: 0 });
+      assert.deepEqual(Array.from(rules.attentionSessions(allLeft)), []);
+      const rejoined = allLeft.map((s) => s.id === 'b' ? { ...s, membership: 'ACTIVE', proto: 'JOINING' } : s);
+      const joined = rules.communicationGraph(rejoined, messages, empty);
+      assert.deepEqual(Array.from(joined.order), ['b']);
+      assert.deepEqual(Array.from(joined.adj.keys()), ['b']);
+      assert.equal(joined.adj.get('b').size, 0);
+      assert.equal(joined.edges.size, 0, 'historical peers cannot return through old messages');
+      assert.deepEqual({ ...rules.counts(rejoined) }, { total: 1, running: 1, blocked: 0, stale: 0 });
+      assert.deepEqual(graphSnapshot(previous), before, 'the previous graph remains intact');
+      assert.equal(JSON.stringify(messages), history);
+      assert.equal(allLeft.length, 3, 'all departed sessions remain available as history');
     });
 
     await t.test('unknown endpoints and self messages create neither nodes nor edges', () => {
@@ -587,6 +1262,72 @@ test('server enforces Host guard and serves the dashboard with tested inline rul
       assert.equal(empty.nodes.length, 0);
     });
 
+    await t.test('polling generations ignore old success, catch and finally after switching teams', async (t) => {
+      const tickStart = script.indexOf('async function tick('), tickEnd = script.indexOf("$('#pause').onclick", tickStart);
+      for (const outcome of ['success', 'failure']) {
+        for (const newFinished of [false, true]) {
+          await t.test(outcome + (newFinished ? ' after new response' : ' during new request'), async () => {
+            const requests = [], timers = new Map(), rendered = [];
+            let connections = 0, nextTimer = 0;
+            const previous = { project: 'alpha', sessions: [], messages: [] };
+            const current = { project: 'beta / 中文', sessions: [], messages: [] };
+            const context = {
+              inFlight: false, paused: false, demo: false, document: { hidden: false },
+              lastState: previous, lastSuccess: 1, connectionError: '',
+              requestGeneration: 0, selectedProject: 'alpha', requestController: null, AbortController,
+              setTimeout(fn, ms) { assert.equal(ms, 10000); timers.set(++nextTimer, fn); return nextTimer; },
+              clearTimeout(id) { timers.delete(id); },
+              renderConnection() { connections++; },
+              render(state) { rendered.push(state); context.lastState = state; },
+              fetch(url, options) {
+                return new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }));
+              },
+            };
+            const tick = runInNewContext(script.slice(tickStart, tickEnd) + '; tick', context);
+            const oldPending = tick(false), oldController = context.requestController;
+            context.requestGeneration++;
+            oldController.abort();
+            context.inFlight = false;
+            context.selectedProject = current.project;
+            const newPending = tick(true), newController = context.requestController;
+            assert.equal(requests[0].options.signal.aborted, true);
+            assert.equal(requests[1].url, '/api/state?project=' + encodeURIComponent(current.project));
+            assert.equal(requests[1].options.signal, newController.signal);
+            assert.equal(timers.size, 2);
+            if (newFinished) {
+              requests[1].resolve({ ok: true, json: async () => current });
+              await newPending;
+            }
+            const before = {
+              state: context.lastState, success: context.lastSuccess, error: context.connectionError,
+              inFlight: context.inFlight, controller: context.requestController, connections,
+            };
+            if (outcome === 'success') requests[0].resolve({ ok: true, json: async () => previous });
+            else requests[0].reject(new Error('old request failed'));
+            await oldPending;
+            assert.equal(context.lastState, before.state);
+            assert.equal(context.lastSuccess, before.success);
+            assert.equal(context.connectionError, before.error);
+            assert.equal(context.inFlight, before.inFlight);
+            assert.equal(context.requestController, before.controller);
+            assert.equal(connections, before.connections, 'old finally cannot update connection UI');
+            assert.equal(timers.size, newFinished ? 0 : 1, 'old finally clears only its own timer');
+            if (!newFinished) {
+              assert.equal(context.requestController, newController);
+              assert.equal(newController.signal.aborted, false);
+              requests[1].resolve({ ok: true, json: async () => current });
+              await newPending;
+            }
+            assert.deepEqual(rendered, [current]);
+            assert.equal(context.lastState, current);
+            assert.equal(context.inFlight, false);
+            assert.equal(context.requestController, null);
+            assert.equal(timers.size, 0);
+          });
+        }
+      }
+    });
+
     await t.test('polling deduplicates requests, retains state on failure and respects pause', async () => {
       const tickStart = script.indexOf('async function tick('), tickEnd = script.indexOf("$('#pause').onclick", tickStart);
       assert.ok(tickStart >= 0 && tickEnd > tickStart);
@@ -594,7 +1335,8 @@ test('server enforces Host guard and serves the dashboard with tested inline rul
       const state = { sessions: [{ id: 'a' }], messages: [] };
       const context = {
         inFlight: false, paused: false, demo: false, document: { hidden: false },
-        lastState: null, lastSuccess: 0, connectionError: '', AbortSignal,
+        lastState: null, lastSuccess: 0, connectionError: '',
+        requestGeneration: 0, selectedProject: null, requestController: null, AbortController, setTimeout, clearTimeout,
         renderConnection() {}, render(st) { context.lastState = st; },
         fetch(url, options) {
           requests++;

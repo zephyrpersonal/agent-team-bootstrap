@@ -8,6 +8,13 @@ are omitted. Each entry records its original line number and SHA-256 before
 sanitization so the local source can be checked without publishing private logs.
 Tests rebase timestamps and assemble short scenarios from these independent rows.
 
+Model/effort metadata compatibility uses explicitly handwritten test rows:
+Claude assistant `message.model` / `message.output_config.effort`, and Codex
+`turn_context.payload.model` / `effort` / `reasoning_effort`. The extracted
+fixtures below do not retain those fields, so these paths are not claimed as
+verified against a real transcript sample. Missing metadata is shown as unknown;
+thinking text, token counts, provider names and global defaults are not evidence.
+
 - `codex.json`: Codex 0.163.0, source `vscode`, rollout dated 2026-10-16.
   Includes `session_meta`, user/assistant `response_item.message`,
   `function_call`, array-valued `function_call_output`, `task_started`,
@@ -88,3 +95,19 @@ qa-01，成员详情可反查任务并筛选账本；任务状态和Owner执行�
 任务节点及选择保持；390px手机页面无横向溢出、画布成员默认可见、账本位于下方。
 真实CLUBHOUSE页面8个成员正常，当前仓库无账本分支时显示未接入且不影响画布。
 CC/CX为本项目的终端文字标识而非官方logo。未连接真实外部账本或issue tracker。
+
+2026-10-22 Team选择器验收：无--project启动，从协议记录发现4个精确project ID，
+默认最近有通信的团队；切换后URL、成员、消息与账本来源更新，清除旧搜索和高亮，
+刷新保持选择。检查快速切换、暂停中切换、人工延迟旧请求、390px页面无横向溢出，
+demo固定展示模拟团队，不混真实选项。工具/输出仍属于session级观测，非team独立
+执行日志；未测试实际多设备或真实手机触控。
+
+herdr现实偏差修复：`herdr.json`为合成脱敏结构，字段依据2026-10-22公开CLI
+只读registry及两个精确会话的发送/结果核验，不保留原业务正文。支持顶层单引号
+literal `agent prompt`，包括字节统计前缀和分号后缀；命令仅静态解析，绝不执行。
+工具接受不是协议ACK；失败/未知不推进成员阶段。95项自动测试通过，覆盖结果
+门控、完整session快照匹配、不可用/过期来源、消息时间窗口和LEFT历史基线。
+浏览器实查golfcms出现project-leader、campaign-team-refresh、campaign-flow-review，
+18条herdr调用包含最近注册/任务/检查点/完成与新指派，执行来源和观测时间可见；
+clubhouse不再带入窗外旧Codex。账本仍需显式指向正确仓库，未自动读取其他项目；
+仅本地herdr，不支持`--machine`远端发送解析，复杂动态shell命令仍不采集。

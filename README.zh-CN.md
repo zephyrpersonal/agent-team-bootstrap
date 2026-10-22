@@ -121,19 +121,21 @@ Worker 交接未完成工作后发送 `LEAVE_REQUEST`（附交接引用），Lea
 本地团队监控工作台采用全宽轻量顶栏、小统计和首屏白卡通信协作图，卡片头部使用本项目文字标识：Claude Code 为 `CC`、Codex CLI 为 `CX`、未知客户端为 `>_`，并非官方 logo。成员列表分开显示角色、客户端、执行活动和协议状态，并突出当前处于 BLOCKED（阻塞）或 STALE（长时间无活动）的待关注成员。成员详情保留工具活动和输出；费用和模型没有数据时不显示。请自己在已安装的 Skill 目录（或本仓库）里运行，Agent 不会启动它，也不依赖它：
 
 ```bash
-node skills/agent-team-bootstrap/scripts/team-dashboard.mjs --project my-project   # 然后打开 http://127.0.0.1:4317/
+node skills/agent-team-bootstrap/scripts/team-dashboard.mjs   # 然后打开 http://127.0.0.1:4317/
 ```
 
-URL 加上 `?demo=1` 可看脚本化演示；演示入口也支持 `?demo=1&at=N&open=L`。需要 Node.js 20+。可选参数：`--port 4317`、`--since 24h`、`--claude-dir`、`--codex-dir`，以及互斥的 `--ledger-repo DIR` 或 `--ledger-dir DIR`。`--ledger-repo` 指定本地 Git 仓库，默认当前工作目录；`--ledger-dir` 指定包含 `plan.md` 和 `roster.md` 的目录。
+通过团队下拉框切换从已发送、已接收协议消息中发现的项目。未指定团队时，默认选择最近有协议活动的团队；未发现任何团队则显示空状态。URL 的 `?project=my-project` 可指定团队，切换团队也会更新 URL。可选的 `--project my-project` 只设置服务默认团队，不是过滤或锁定，仍可选择其他团队；显式选择没有活动的团队时显示空视图。
+
+URL 加上 `?demo=1` 可看脚本化演示；演示入口也支持 `?demo=1&at=N&open=L`。需要 Node.js 20+。可选参数：`--port 4317`、`--since 24h`（也接受 `90m`、`7d` 等）、`--claude-dir`、`--codex-dir`，以及互斥的 `--ledger-repo DIR` 或 `--ledger-dir DIR`。`--since` 按事件时间戳过滤窗口内的消息和团队发现，文件修改时间仅用于优化扫描。已扫描文件中的更早事件仍用于建立协议历史，因此晚到消息不会撤销旧的离队状态。`--ledger-repo` 指定本地 Git 仓库，默认当前工作目录，并按当前所选团队读取分支。选择团队不会自动发现或绑定实际项目仓库；实际仓库不在当前目录时需指定 `--ledger-repo`。`--ledger-dir` 指定包含 `plan.md` 和 `roster.md` 的目录，必须同时提供 `--project`，将此快照绑定到单个团队；选择其他团队时，会话和消息仍可用，但该目录账本返回 `unavailable`，不会复用绑定团队的任务。
 
 - **账本快照与任务关联**：右侧面板仅读取 `plan.md` 和 `roster.md`。Git 模式优先读取本地 `team/<project>` 分支，再尝试本地保存的 `origin/team/<project>` 跟踪引用，展示引用和 commit，不会自动 fetch。目录模式展示工作区快照，不绑定固定 commit。API 的 `ledger.status` 为 `ok`、`unavailable` 或 `error`，并包含来源、引用/commit、任务和诊断；本地缺少分支时返回 `unavailable`，会话和消息仍正常返回。选择任务可高亮关联的 owner/reviewer，并打开成员详情；成员详情列出关联任务，同时按该成员筛选任务面板。任务还支持状态和关键词筛选。关联必须精确匹配 roster 的 id/address、客户端和完整 session ID，不按显示名或短 ID 猜测。任务状态与观测到的执行活动分别记录。没有 issue tracker adapter。
 
 - **通信协作图**：全员主图使用 D3 动态力导向布局及碰撞避让；可拖动成员卡片调整位置、拖动背景平移，并用滚轮或触控手势缩放。“适配全员”将所有成员适配到当前视口，“重新布局”重置成员位置。手机使用精简身份卡，活动和输出可在成员详情查看。D3 7.9.0 以 ISC 许可证随项目本地提供，无需 CDN 或外部脚本请求。完整显示当前消息窗口内的所有有效通信 pair，双向及重复消息合并为一条无向连线；孤立成员也保留显示，未知端点与自发自收消息不会生成连线。连线表示通信联系，不代表上下级或任务依赖。颜色按最近消息类型区分协调 / 分配、成员协作、审查和其他；端点标记及虚线（阻塞）、点线（完成）反映最近消息内容，不代表送达状态。聚焦或悬停连线可查最近类型、状态和时间，成员详情可查通信对象及最近相关消息。卡头文字标识随活动和状态呈现动画反馈；点击卡片可打开成员详情。所有有效 pair 的双向新消息均可沿线播放信封动画，每批最多 4 条，抵达后触发接收方卡片反馈；首次加载和已见消息不重播。动画开关与 `prefers-reduced-motion` 控制动态效果；暂停刷新、页面转入后台或连接失败时也会暂停动画。
 - **消息与刷新**：消息支持按类型、成员和关键词筛选。页面每 3 秒自动刷新，可暂停、继续或立即刷新；连接失败时保留已加载的旧数据。接口最多返回 300 条消息，消息表格最多显示 100 条。
-- **只读、仅本机**：读取 `~/.claude/projects` 和 `~/.codex/sessions` 里的会话记录及上述本地账本快照，只监听 `127.0.0.1`，并拒绝其他 `Host` 头。它不是传输通道、收件箱或监听器。
-- **推断而非权威**：消息只取自发出的 `SendMessage` / `send_message_to_thread` 调用（Claude 接收方再加 `<cross-session-message>` 包装）。根据会话记录推断的角色和状态并非权威信息，推断为 Leader 不代表该成员是唯一现任 Leader。已关闭的 Session 与空闲无法区分；超过 30 分钟没有活动显示为 STALE。不显示 herdr 通信的消息和其他机器上的会话。
+- **只读、仅本机**：读取 `~/.claude/projects` 和 `~/.codex/sessions` 里的会话记录、上述本地账本快照，以及 CLI 可用时缓存的只读 `herdr agent list` 快照，只监听 `127.0.0.1`，并拒绝其他 `Host` 头。它不是传输通道、收件箱或监听器。
+- **消息与执行来源**：消息来自发出的 `SendMessage` / `send_message_to_thread` 调用、Claude 接收方的 `<cross-session-message>` 包装，以及 Claude Bash/parallel Bash 或 Codex `exec_command` 会话记录中的字面量 `herdr agent prompt` 命令。herdr 尝试标注 pending/accepted/failed/unknown 送达状态；只有匹配的 accepted 结果才推进协议状态或发现团队。accepted 仅证明已提交，不是接收方 ACK。registry 仅按客户端和完整 session ID 精确匹配后覆盖执行活动，提供显示名、执行来源和观测时间，不会创建团队成员或把协议任务标成 COMPLETE；`done` 映射为执行 IDLE。herdr 不可用、身份或状态不明确时退回会话推断，可能显示 UNKNOWN。角色仍属推断，推断为 Leader 不代表该成员是唯一现任 Leader。
 - **已用真实记录核对**：Codex 0.163.0 的 `send_message_to_thread` 使用 `threadId` / `prompt`；Claude 2.1.296 的接收包装出现在 `queued_command` 附件和带固定前缀的 user 消息中。脱敏 fixture 和验证范围见 [scripts/fixtures/team-dashboard](skills/agent-team-bootstrap/scripts/fixtures/team-dashboard/README.md)。旧版 Codex `event_msg.agent_message` 分支只有合成兼容测试，本地未找到真实样本。
-- **边界限制**：仅读取未压缩的 `.jsonl`。Codex 明确的完成或中断事件会清除待完成工具；缺少结束事件的中断会话仍可能保持 RUNNING，直到 STALE。文件增量按 64 KiB 分块读取，保留一条未完成行；同一 Session 的多个文件合并消息，并采用最新执行快照。
+- **边界限制**：仅读取本机未压缩的 `.jsonl`，不读取远端会话或任意 shell 脚本。herdr 命令识别仅支持受限的字面量 shell 形式，不执行会话记录中的命令。registry 快照缓存 5 秒，仅支持有明确 session ID 的 Claude/Codex 会话，其他 Agent 类型或缺失 ID 的成员无法关联。Claude 没有待完成工具或明确回合证据时为 UNKNOWN；Codex 只有工具结果也不能证明 IDLE。没有匹配的 registry 观测时，会话超过 30 分钟没有活动显示为 STALE。Codex 明确的完成或中断事件会清除待完成工具；缺少结束事件的中断会话仍可能保持 RUNNING，直到 STALE。文件增量按 64 KiB 分块读取，保留一条未完成行；同一 Session 的多个文件合并消息，并采用最新执行快照。
 
 ## 消息限制
 
