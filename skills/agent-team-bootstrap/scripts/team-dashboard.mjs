@@ -160,7 +160,8 @@ function ingest(rec, ev) {
         const result = parseHerdrResult(ev.content, ev.isError);
         for (const message of attempts) {
           const matches = result.agents.filter((a) => a.name === message.toRaw);
-          message.delivery = result.delivery === 'accepted' && matches.length !== 1 ? 'unknown' : result.delivery;
+          const ambiguous = attempts.filter((m) => m.toRaw === message.toRaw).length !== 1;
+          message.delivery = ambiguous || (result.delivery === 'accepted' && matches.length !== 1) ? 'unknown' : result.delivery;
           if (message.delivery === 'accepted') message.toSession = `${matches[0].client}:${matches[0].session}`;
         }
       }
@@ -240,7 +241,7 @@ export function aggregate(recs, project, now, { cutoff = -Infinity, snapshot = n
   for (const r of recs) {
     r.key = `${r.client}:${r.ctx.session || r.base}`;
     for (const m of r.sent) {
-      if (m.project !== project) continue;
+      if (m.project !== project || m.ts > now) continue;
       if (effective(m)) {
         const mi = member(r);
         mi.sentT.add(m.type);
@@ -250,7 +251,7 @@ export function aggregate(recs, project, now, { cutoff = -Infinity, snapshot = n
       sent.set(m.id ?? `${r.key}#${m.ts}#${anon++}`, { ...m, fromSession: r.key });
     }
     for (const m of r.recvd) {
-      if (m.project !== project) continue;
+      if (m.project !== project || m.ts > now) continue;
       member(r).recvT.add(m.type);
       if (inWindow(m)) observed.add(r.key);
       recvAll.push({ m, key: r.key });

@@ -260,6 +260,37 @@ test('herdr: literal Bash, parallel Bash and Codex exec_command require an accep
   }
 });
 
+test('herdr: mixed results for repeated same-target sends remain unknown', () => {
+  const f = fixture(), target = herdr.prompted.result.agent;
+  f.claude('worker', jl(claudeSend(target.agent_session.value, 0, 'join', 'P:wms T:JOIN_REQUEST ID:join FROM:worker-a')));
+  f.claude('sender', jl(
+    { type: 'assistant', sessionId: 'sender', timestamp: iso(10), message: { content: [{ type: 'tool_use', id: 'batch', name: 'Bash', input: {
+      command: "herdr agent prompt worker-a 'P:wms T:ASSIGN ID:assign FROM:leader'; herdr agent prompt worker-a 'P:wms T:RELEASE ID:release FROM:leader'",
+    } }] } },
+    { ...claudeResult('sender', 20, 'batch'), message: { content: [{ type: 'tool_result', tool_use_id: 'batch', content: JSON.stringify(herdr.prompted) + '\n' + JSON.stringify(herdr.blocked) }] } },
+  ));
+  const state = f.tracker().state();
+  assert.deepEqual(state.messages.filter((m) => m.transport === 'herdr').map((m) => m.delivery), ['unknown', 'unknown']);
+  assert.equal(state.sessions.find((s) => s.name === 'worker-a').proto, 'JOINING');
+});
+
+test('future leave events do not change current membership or protocol', () => {
+  const f = fixture();
+  f.claude('worker', jl(claudeSend('worker', 0, 'join', 'P:wms T:JOIN_REQUEST ID:join FROM:worker-a')));
+  f.claude('leader', jl(
+    claudeSend('leader', 10, 'ack', 'P:wms T:JOIN_ACK ID:ack FROM:leader', 'worker-a'),
+    claudeSend('leader', 10000, 'release', 'P:wms T:RELEASE ID:release FROM:leader', 'worker-a'),
+  ));
+  f.claude('worker', jl(
+    claudeSend('worker', 0, 'join', 'P:wms T:JOIN_REQUEST ID:join FROM:worker-a'),
+    claudeSend('worker', 11000, 'left', 'P:wms T:LEAVE_ACK ID:left RE:release FROM:worker-a', 'leader'),
+  ));
+  const state = f.tracker().state(), worker = state.sessions.find((s) => s.name === 'worker-a');
+  assert.equal(worker.membership, 'ACTIVE');
+  assert.equal(worker.proto, 'JOINING');
+  assert.deepEqual(state.messages.map((m) => m.id), ['join', 'ack']);
+});
+
 test('herdr: failed, unknown and pending attempts alone cannot discover a project or create members', () => {
   for (const output of [null, herdr.blocked, herdr.timeout, { result: { type: 'agent_prompted', agent: { ...herdr.prompted.result.agent, name: 'wrong-target' } } }]) {
     const f = fixture();
