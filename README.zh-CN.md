@@ -7,6 +7,7 @@
 ## 功能特性
 
 - **Leader 严格只负责协调**：把你的目标澄清成任务书，先侦察再拆分任务包，多任务包的计划先给你确认，派发后让 Worker 朝目标收束，最后用一份报告收尾；不亲自编码、测试、审查、合并、部署，也不轮询或监听，唯一会写的文件是团队账本。
+- **独立任务管理能力**：Leader [创建、更新、查重、归组、合并／拆分任务](skills/agent-team-bootstrap/references/task-management.md)，维护依赖、负责人和可追溯历史；按任务组建必要的执行／研究／审查 Worker 小组，保留单一责任 Owner，不机械扩充团队或绕过审批。
 - **Worker Mesh 点对点协作**：Worker 直接讨论 API、技术问题、联调和 Bug，不经过 Leader 转发。
 - **独立技术审查**：Reviewer 与开发 Worker 直接沟通，只向 Leader 提交最终审查结论。
 - **原生通信**：使用可调用的 Codex / Claude Code Session 消息工具，不自建消息队列、后台服务或监听程序。

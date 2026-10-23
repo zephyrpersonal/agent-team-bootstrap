@@ -90,7 +90,7 @@ One Leader per team at a time, but the Leader and any Worker can be replaced, e.
 
 ## B. Leader startup / recovery
 
-Load [references/leader.md](references/leader.md) and follow sections 6 (startup), 4 (mission lifecycle) and 5 (event table). The ledger layout and templates are in [references/ledger.md](references/ledger.md).
+Load [references/leader.md](references/leader.md) and follow sections 6 (startup), 4 (mission lifecycle) and 5 (event table). Also load [references/task-management.md](references/task-management.md), the Leader's independent task-management capability: create/update, deduplicate/group/merge/split, maintain dependencies, assemble task-scoped Worker groups and close tasks with evidence. Reuse existing tasks before creating more; retain one accountable owner per package. The ledger layout and templates are in [references/ledger.md](references/ledger.md).
 
 ## C. Worker startup (manual or Leader-created)
 

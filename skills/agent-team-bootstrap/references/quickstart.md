@@ -19,10 +19,18 @@ Codex:
 ```text
 $agent-team-bootstrap leader
 Project: <project-name>
-Follow references/leader.md. Check native messaging once and publish my verified thread address. Keep the team ledger on branch team/<project-name> of Repo: <git url> (or Ledger: <ledger repo url>); you need no project code checkout. For each goal I give: restate it as a mission (missions/<id>.md, with priority) and ask me at most three questions; scout first if you need codebase knowledge; show me multi-package plans before dispatch; assign with pinned ledger refs; keep Workers on brief; finish with one final report and close the team when I accept. Never code, test, review code, merge, deploy, monitor or take over Worker tasks.
+Follow references/leader.md and load references/task-management.md for task creation, updates, deduplication/regrouping and task-scoped Worker groups. Check existing tasks before creating new ones. Check native messaging once and publish my verified thread address. Keep the team ledger on branch team/<project-name> of Repo: <git url> (or Ledger: <ledger repo url>); you need no project code checkout. For each goal I give: restate it as a mission (missions/<id>.md, with priority) and ask me at most three questions; scout first if you need codebase knowledge; show me multi-package plans before dispatch; assign with pinned ledger refs; keep Workers on brief; finish with one final report and close the team when I accept. Never code, test, review code, merge, deploy, monitor or take over Worker tasks.
 ```
 
 Claude Code: replace the first line with `/agent-team-bootstrap leader`. Optionally run `/rename project-leader`; ask Claude to show `/list-agents` for the actual address.
+
+## Ask the Leader to manage tasks
+
+```text
+Review the current ledger before registering this request. Update an existing task if it is a clarification, reuse exact duplicates, and combine work only when every original acceptance item and approval boundary can be preserved. Keep IDs/history and remap dependencies; executing work needs STOP/handoff before overlapping ownership changes. Persist the new snapshot before pinned assignments. Assemble only the task-specific Workers needed: one accountable owner, scoped collaborators and an independent Reviewer when required; reuse eligible members before authorized provisioning. Report LEDGER_UNAVAILABLE instead of claiming registration without a ledger.
+```
+
+This invokes the Leader's task-management capability; it does not approve a new mission scope, staffing, merge, deployment or database change. See [task-management.md](task-management.md).
 
 ## Worker manually started by Owner (prompt)
 

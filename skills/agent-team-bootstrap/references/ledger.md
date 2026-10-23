@@ -75,6 +75,12 @@ Use the existing English field names below as table headers so the optional dash
 
 Task owner/reviewer values link through an exact roster id or address, then the agent kind and complete session ID; names and shortened IDs are insufficient. The optional, human-run dashboard reads only `plan.md` and `roster.md` from a local snapshot and never automatically fetches or writes the ledger. This human view is not a task channel and does not change the message and pinned-ref rules above.
 
+## Task operations and history
+
+[task-management.md](task-management.md) defines creation, updates, deduplication, grouping, merge/split, dependencies, task-scoped staffing and closure. Keep the existing tables and states. Put request sources, acceptance mappings, `superseded by` / successor IDs, change reasons, handoff/control receipt IDs and revision provenance in plain-text brief/decision notes, not new columns or a second Markdown table. Retain old plan rows and IDs; retired open tasks are `STOPPED`, not `DONE`, and completed evidence is never reassigned to a new candidate by editing a row.
+
+A task-scoped group keeps one plan owner and the existing reviewer field. List additional collaborators in brief/roster notes by exact member/session with contribution boundaries, P2P contacts, integration responsibility and membership changes. Independently accepted deliverables become separate packages, not a multi-owner cell. Group creation does not create another Leader or authorization scope.
+
 ## Execution bounds and approval provenance
 
 Keep execution bounds in roster **notes below the table**, keyed by exact member/session; do not add ad-hoc table columns. Record allowed/denied actions and environments, source (`owner`, `leader-phase`, `project-runtime`), scope (`session-role`, task or team), applicable phase and source ref. Update on JOIN and restriction-related BLOCKED. A read-only scout's role scope is different from a task-wide prohibition.

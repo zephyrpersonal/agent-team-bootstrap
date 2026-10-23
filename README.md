@@ -7,6 +7,7 @@
 ## Features
 
 - **Coordination-only Leader:** clarifies the Owner's goal into a mission, scouts and plans work packages, gets multi-package plans approved, dispatches, keeps Workers converging and closes with one final report. Does not code, test, review code, merge, deploy, or poll for updates; the only files it writes are the team ledger.
+- **Independent task management:** the Leader [creates, updates, deduplicates, groups, merges/splits and closes ledger tasks](skills/agent-team-bootstrap/references/task-management.md), preserving dependencies, ownership and history. It assembles task-scoped execution/research/review groups with one accountable owner, not a fixed full roster per task or a new approval bypass.
 - **Worker Mesh:** registered Workers communicate directly for implementation questions, API contracts, integration and bug fixes, without routing routine messages through the Leader.
 - **Peer code review:** Reviewer and producing Worker exchange feedback directly. Only final review verdict and completion receipts reach the Leader.
 - **Native session transport:** uses actual supported Codex or Claude Code peer messaging tools; no custom mailbox, daemon, listener, or timer.

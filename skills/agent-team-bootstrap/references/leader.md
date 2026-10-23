@@ -2,7 +2,7 @@
 
 Load this file whenever this session is the Leader; it replaces the Leader parts of SKILL.md. SKILL.md still applies for transport, message budget, Worker Mesh, Leader change / AFK and the message handler.
 
-The Leader turns the Owner's intent into a confirmed mission, plans it, dispatches work packages, keeps everyone converging on the mission, and closes it. It owns the **team ledger** ([ledger.md](ledger.md)) and nothing else it writes.
+The Leader turns the Owner's intent into a confirmed mission, plans it, dispatches work packages, keeps everyone converging on the mission, and closes it. It owns the **team ledger** ([ledger.md](ledger.md)) and nothing else it writes. Load [task-management.md](task-management.md) as its task-management capability: triage/create, update, deduplicate/group, merge/split, dependencies, task-scoped staffing and evidence-backed closure. Load it at startup and on task-management requests; its operation rules complement, never override, the decision rights here.
 
 ## 1. Boundaries
 
@@ -34,7 +34,7 @@ A Leader decision made from the Owner profile or a recorded decision carries `BY
 
 Classify every Owner message before acting:
 
-- **New request** → classify it (priority, independence, size; section 4a), then intake (section 4) as a new mission or as a change to a running one, and schedule it.
+- **New request** → first triage against existing tasks using task-management.md: answer a question, retain a duplicate, update an existing deliverable, group related independent work, or create a new task/mission. Then classify priority, independence and size (section 4a), run the applicable intake/gate and schedule. Do not create a new package for every repeated or clarifying message.
 - **Change to a running mission** → name which mission it belongs to and restate the change against `missions/<id>.md` in one or two lines; if it alters goal, non-goals or acceptance criteria, get the Owner's confirmation, then update the ledger and `REDIRECT` / `STOP` affected work packages.
 - **Question / status request** → answer from the ledger and receipts, separating confirmed receipts from unknowns (herdr: may add one `agent list`, labelled *herdr-observed*). An Owner report that Workers have stopped triggers section 5a even before `DUE`; do not answer it with another unsupported claim that they are still researching.
 - **Answer to an open question** → record it in `decisions.md` (`BY:owner`), unblock waiting work.
@@ -53,7 +53,7 @@ INTAKE → (SCOUT) → PLAN → (Owner gate) → DISPATCH → EXECUTE → ACCEPT
 3. **Plan.** Add the mission's work packages to `plan.md` (mission and priority columns): work packages with owner, dependencies, parallel groups, deliverable, acceptance criteria, budget, reviewer and checkpoints; shared contracts (APIs, schemas) as their own early package that others depend on; integration as its own package. Weigh token cost: parallelize only distinct scopes or deliberate second opinions; never two Workers hunting the same bug or a fix started before its diagnosis. A Reviewer reviews on `REVIEW_REQUEST`, not pre-emptively, unless assigned an investigation.
 4. **Gate.** A plan with two or more packages, or one touching a shared contract, goes to the Owner as a short summary plus the ledger ref; dispatch only after approval. Single-package plans skip the gate.
 5. **Dispatch.** Write each `wp/<id>.md` from the template, commit and push the ledger, then send `ASSIGN REF:team/<project>@<sha>:wp/<id>.md` with your epoch and only the peer contacts that package needs (listed in the brief's `Peers` / `Consult`). Workers talk to those peers directly; never forward questions or review feedback. Check the Worker's `ASSIGN_ACK` restatement (`U:`) against the brief; if it misreads the brief, correct it at once with `REDIRECT`.
-6. **Execute.** Handle receipts (section 5); on each receipt reassess the plan and redirect or stop redundant work. Update the ledger when status changes, not for every message. Never ask for or mirror routine peer conversations.
+6. **Execute.** Handle receipts (section 5); on each receipt reassess the plan and redirect or stop redundant work. For merge/split/reassignment follow task-management.md's handoff, stable-ID, dependency and pinned-ref rules; an idle group or changed ledger row is not a completed handoff. Update the ledger when status changes, not for every message. Never ask for or mirror routine peer conversations.
 7. **Accept.** A package is done when its `COMPLETE` (and `REVIEW_VERDICT` if a reviewer is assigned) arrive and the acceptance criteria are claimed met with references. The mission is done when every package is done and the mission acceptance criteria are covered.
 8. **Report.** Send the Owner one final report: what was delivered (refs), what was not, risks, follow-ups, decisions taken `BY:profile`. Mark the mission `REPORTED`.
 9. **Close.** After the Owner accepts: `RELEASE` the Workers no other mission uses (unless the Owner keeps them), mark the mission `CLOSED`, push the ledger, end. Follow-ups become a new mission.
@@ -101,7 +101,7 @@ A Leader may advance its own phase gate through a pinned `REDIRECT` / `CONTINUE`
 | `CHECKPOINT` | Compare to the brief and plan. On track → no reply, or `CONTINUE` if it was a gate checkpoint. Drifting → `REDIRECT` with a pinned ref to an updated brief. Pointless now → `STOP`. |
 | `OVER_BUDGET` | Decide per section 2: `CONTINUE` with a new budget, `REDIRECT` to a smaller deliverable, or `STOP`; escalate to the Owner if beyond your rights. |
 | `BLOCKED` / `SCOPE_CHANGE_REQUEST` / `COORDINATION_UPDATE` | Resolve within your rights, else ask the Owner once and record the answer. A restriction mismatch follows section 4b: inspect its source/scope, choose an eligible Worker or create an authorized specialist, not repeated unlock requests. A task/runtime denial is never a staffing workaround. |
-| `REVIEWER_NEEDED` | Designate a Reviewer, send mutual peer contacts; none available → mark `REVIEW_PENDING`. Never relay review content or review yourself. |
+| `REVIEWER_NEEDED` | Designate a Reviewer, send mutual peer contacts; none available → record `REVIEW_PENDING` in coordination notes, not as a new plan status. Never relay review content or review yourself. |
 | `COMPLETE` / `REVIEW_VERDICT` | Record (never verify the implementation yourself; merges and deploys still need Owner approval); check package acceptance; unlock dependents and re-run the schedule (4a); if the mission is done, go to Report. `COMPLETE STATUS:stopped` records `STOPPED`, not `DONE`: stop waiting for normal completion of that package, check uncovered acceptance criteria, then re-plan or ask the Owner. |
 | `PAUSE_ACK` | Mark the package `PAUSED`; `ASSIGN` the higher-priority package that needed the Worker. Paused work resumes through 4a. |
 | `PEER_UNREACHABLE` / `AFK` / `BACK` / `LEAVE_REQUEST` | As in SKILL.md *Leader change and lost members* / leaving rules. |

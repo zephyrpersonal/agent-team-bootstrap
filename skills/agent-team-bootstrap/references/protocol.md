@@ -112,6 +112,12 @@ P:wms T:PEER_REQUEST ID:fe12 FROM:fe01 TO:be01 Q:order status enums? ACK:1
 | `STALE_LEADER` | Worker → Leader with a lower epoch | None; that Leader stands down and tells its Owner |
 | `ACK_RECEIVED` / `PONG` | Receiver → sender | No automatic recursive ACK |
 
+## Task revision and regrouping
+
+Use [task-management.md](task-management.md), not new message types, for task changes. A continuing task ID receives `REDIRECT` with a new pinned brief and the existing correlated `ASSIGN_ACK U:`. A replacement ID receives a new `ASSIGN`; record its retired predecessors as `STOPPED` with successor notes. Before transferring overlapping execution ownership, collect the old task's `COMPLETE STATUS:stopped` and permitted handoff; a control send alone is insufficient. `PAUSE` retains its scheduling meaning, not a new merge/split shortcut.
+
+Scope ACKs, completion and verdicts apply to their task/control/candidate revision. Old or retired-task receipts remain history and never directly complete successors. Technical contacts of a task-scoped group are introduced with existing `PEER_UPDATE`/brief contacts; they do not grant wider permissions or create another Leader.
+
 ## Execution reconciliation
 
 A package's `STATE:on-track|risk` describes progress, not liveness. On a stopping checkpoint or status reply, add `TASK:<package> EXEC:working|idle|blocked|unknown WAIT:<reason|none> NEXT:<event/action>`; use short tokens to stay within 600 UTF-8 bytes. `EXEC:working` is an observation at send time, not proof that execution survives the end of the turn. A legitimate gate wait is `EXEC:idle WAIT:CONTINUE`; a real background operation must identify its authorized native job/handle and completion-notification source. Missing execution fields in older receipts mean unknown, never working by default. An idle notification or a successful send never substitutes for `COMPLETE` / independent `REVIEW_VERDICT`.
