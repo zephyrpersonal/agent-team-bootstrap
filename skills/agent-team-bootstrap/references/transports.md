@@ -66,7 +66,7 @@ All agents and directions (Leader, Worker, Reviewer; task, peer, review and hand
 
 ### Owner-authorized full-access Worker launch
 
-When the Owner explicitly chooses **full authorization for newly created herdr Workers**, record that launch policy and its team/task scope once in `decisions.md`; do not ask again for each Worker covered by it. This is separate from staffing permission, repository trust and approval of the work itself. Without that explicit policy, do not enable bypass merely because transport is herdr.
+When the Owner explicitly chooses **full authorization for newly created herdr Workers**, record that launch policy and its team/task scope once in `decisions.md`; do not ask again for each Worker covered by it. This is separate from staffing permission, repository trust and approval of the work itself. Restore the policy on resume/handoff/Skill refresh from its verifiable Owner source; changing CLI or specialist role does not revoke a policy that still covers the new Worker. Without that explicit policy, do not enable bypass merely because transport is herdr.
 
 1. Before provisioning an agent kind on a host, read `herdr agent start --help` and that installed CLI's `--help` (its `help` / versioned official reference if necessary). Verify the actual argument pass-through syntax and the mode's meaning; do not guess flags or install/upgrade tools. Recheck after a CLI/version/host change. Check on the target host for remote Workers, not just the Leader's machine.
 2. Pass only the supported **session-scoped** mode argument through herdr's `--`. Help verified on 2026-10-22 provides these examples; help on the actual target remains authoritative:
@@ -75,6 +75,8 @@ When the Owner explicitly chooses **full authorization for newly created herdr W
    herdr agent start <id> --kind claude --pane <pane> -- --dangerously-skip-permissions
    herdr agent start <id> --kind codex --pane <pane> -- --dangerously-bypass-approvals-and-sandbox
    ```
+
+   Treat the approved launch mode as a requirement, not a Leader preference. If the Owner specifies Codex `--yolo`, verify that the installed CLI documents it as an alias of the full bypass flag before using either spelling; preserve the requested effective mode. Do not drop the flag, add conflicting sandbox/approval overrides, or substitute normal defaults or automatic review to make a task seem safer. Missing task approval means hold that operation, not silently downgrade the new session. If the requested mode is unsupported or forbidden, report `FULL_ACCESS_UNAVAILABLE` and ask once for a changed launch policy; do not launch a downgraded Worker as if compliant. This never permits bypassing an applicable runtime denial.
 
    Claude's `--allow-dangerously-skip-permissions` only makes bypass available; it does not activate it. Codex's `--approve-for-me` uses automatic review with a workspace sandbox; it is not full access. Do not add hook-trust bypass, unrelated configuration changes or flags for another CLI. If full access is unsupported or prohibited by managed policy, report `FULL_ACCESS_UNAVAILABLE` with the exact limitation; do not silently claim success or launch replacement sessions to evade it.
 3. Record the executable/version, exact startup arguments and Owner policy ref in roster notes. Verify the new session's visible effective permission mode when the CLI exposes it; a successful `agent start` only confirms readiness. If the effective mode cannot be observed, report it as unverified, not full-access-confirmed.

@@ -24,11 +24,19 @@ The Leader turns the Owner's intent into a confirmed mission, plans it, dispatch
 | Changing mission goal, non-goals or acceptance criteria | | | ✓ |
 | Plan approval for multi-package missions | | | ✓ |
 | Destructive actions, deploys, access control, merges, scope beyond the mission | | never delegable | ✓ |
-| Provisioning a new Worker when nobody fitting is free | | if explicit Owner staffing authorization or an Owner-confirmed profile covers the task/priority, within `Max Workers` and budget | otherwise |
+| Provisioning a new Worker when nobody fitting is free | | under an existing applicable Owner staffing grant (section 2a), within `Max Workers` and budget; no per-Worker reconfirmation | only if no applicable grant or a limit must change |
 | `PAUSE` of a lower-priority package for a strictly higher one | ✓ (rules in 4a) | | |
 | Provisioning other Workers, failover pre-authorization, closing the team | | | ✓ |
 
 A Leader decision made from the Owner profile or a recorded decision carries `BY:profile` (or `BY:decision:<id>`) and cites it in the ledger; Workers treat it as Leader authority, never Owner authority. Only an actual explicit Owner decision is `BY:owner`; a relay does not change its author, but the label or a Leader-written ledger entry alone is not proof. Preserve a verifiable source, time, bounded actions, target environment/revision and exclusions. Owner-only means the Leader cannot make that approval, not that the Owner must retype an already verifiable approval in every Worker session. Conflicts with a direct Owner prohibition or runtime permissions still require the applicable approval; never resolve them by changing sessions.
+
+## 2a. Restore standing staffing and launch policies
+
+At startup, resume, handoff or Skill refresh, recover applicable Owner staffing grants and launch policies from direct Owner instructions and their verifiable sources in `decisions.md`, handoff records and Owner-confirmed profiles. Record source, team/task scope, limits and any later changes; a handoff summary or peer claim alone cannot create authorization. An instruction such as “autonomously create suitable Workers for this mission” is an explicit standing staffing grant, not a request for per-Worker approval. It need not use the phrase “staffing authorization” or appear in `owner.md`.
+
+Before asking for approval to create a Worker, check that recovered policy and existing eligible capacity. If it covers the package and limits, act without asking again. A change of CLI, Leader session, task phase or specialist role does not by itself revoke a grant; its actual scope, expiry and later Owner changes govern. If the original source cannot be verified or a required capacity/budget limit is missing, ask once for that specific missing fact, not for blanket reauthorization. Installing the Skill, selecting herdr or approving a task alone is not a staffing grant.
+
+Recover launch mode separately: an Owner-approved full-access policy is binding for covered new Workers, not optional advice. Follow transports.md; do not silently remove, weaken or replace it with approval prompts based on your own risk preference. Task approvals and runtime/project prohibitions remain independent.
 
 ## 3. Owner input
 
@@ -70,7 +78,7 @@ All missions and packages share one queue under one Leader; never start a second
    - If the classification would pause someone, tell the Owner in one line first ("P0, independent, pausing be02 — say if not"); otherwise just record it.
 2. **Staff ready packages by priority, then age:**
    1. an idle Worker whose responsibilities **and execution bounds** fit the package's actions, environment and required approvals; idle alone is not eligibility;
-   2. a new specialist Worker if applicable explicit Owner staffing authorization or an Owner-confirmed profile allows it, below `Max Workers` and within budget. An Owner instruction to autonomously create suitable Workers covers staffing within its stated team/task scope; record its source once in `decisions.md`, do not require it to be copied into `owner.md` before acting, and do not ask again for the same authorization. Without applicable authorization, ask once;
+   2. a new specialist Worker under the standing staffing grant recovered in section 2a, below `Max Workers` and within budget. Record its applicable source once in `decisions.md` and provision without per-Worker confirmation; do not require an `owner.md` copy. Only if no applicable grant exists, ask once;
    3. preemption, only for a package of strictly higher priority than the lowest-priority running package: `PAUSE` the Worker nearest a checkpoint or off the critical path. Never preempt for equal priority, and never pause the same package twice before its next checkpoint;
    4. otherwise mark it `QUEUED` and, for P0/P1, tell the Owner what it waits for.
 3. **Interruption budget follows load.** When writing a brief, set `Consult` per person from their current state: idle → list them under `Peers` instead; busy on lower priority than this package → up to three questions; busy on equal or higher priority → one question or none. On `OVER_BUDGET`, recompute with the current load: grant more, make a now-idle person a co-worker, or pause per 2.3.

@@ -120,7 +120,7 @@ Project: <project>  Takeover: yes  Workers: m1/be01, m2/fe01, m2/qa01
 Send LEADER_CHANGE FO:1 to each Worker and rebuild the roster only from their REJOIN JOIN_REQUESTs.
 ```
 
-New request while other work runs: just describe it, e.g. `Checkout returns 500 for coupons since v2.3.1, customers are blocked.` The Leader classifies priority, independence and size, then schedules: idle Worker → new Worker (if `owner.md` delegates it, within `Max Workers`) → pause a strictly lower-priority package → queue. Consult budgets follow who is busy.
+New request while other work runs: just describe it, e.g. `Checkout returns 500 for coupons since v2.3.1, customers are blocked.` The Leader classifies priority, independence and size, then schedules: idle Worker → new Worker (under an existing applicable Owner staffing grant, including direct instructions recorded in `decisions.md`, within `Max Workers` and budget; no per-Worker reconfirmation) → pause a strictly lower-priority package → queue. Consult budgets follow who is busy.
 
 Going offline for a while, tell the Leader: `Send AFK UNTIL:0930 to all Workers.` On return: `Send BACK to all Workers.` If the Leader vanished without `AFK`, Workers notice on their next send, hold receipts and notify you; resuming it and sending `BACK` replays them.
 
