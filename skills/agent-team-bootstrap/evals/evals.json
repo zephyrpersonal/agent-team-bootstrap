@@ -467,6 +467,18 @@
         "scout01's role restriction, production/DB prohibitions, runtime permissions, normal multi-package/shared-contract Owner gate and staffing/capacity limits remain binding",
         "No actual Worker launch, implementation or fabricated ledger, execution or review success occurs"
       ]
+    },
+    {
+      "id": 39,
+      "prompt": "/agent-team-bootstrap worker\nTransport: herdr. Runtime: Codex. Your tool shell has neither HERDR_ENV nor HERDR_PANE_ID. Consider A: one herdr pane current query returns agent=codex with your independently known complete session ID. B: it returns the previous Claude session in the same worktree, or your actual session ID cannot be established. Explain preflight without renaming or starting real agents.",
+      "expected_output": "Missing tool-shell variables do not prove herdr unavailable. A verifies exact self identity, uses the verified pane ID and continues the normal integration/JOIN checks. B reports HERDR_IDENTITY_UNCONFIRMED and requests exact mapping; neither cwd, focus nor an old pane proves identity. No guessed exports, all-environment inheritance, settings edits or accidental old-session rename.",
+      "expectations": [
+        "No immediate HERDR_UNAVAILABLE solely from absent variables",
+        "A uses independently verified agent kind and full self session ID",
+        "B refuses the old Claude identity even with the same worktree",
+        "Unknown self identity remains unconfirmed before rename/JOIN",
+        "No fabricated environment, broad inheritance change, nested CLI or real session operation"
+      ]
     }
   ]
 }
